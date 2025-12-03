@@ -1,4 +1,4 @@
-# Opsfleet Documentation Assistant
+# RAG Documentation Assistant
 
 > An intelligent LangGraph-powered agent that helps developers work with LangChain, LangGraph, and LangSmith by answering practical questions using local documentation and optional web search.
 
@@ -10,7 +10,7 @@
 
 ## Overview
 
-The Opsfleet Documentation Assistant is a **multi-stage LangGraph agent** that:
+The RAG Documentation Assistant is a **multi-stage LangGraph agent** that:
 
 - **Understands intent**: Classifies user questions into 10 different intent types (implementation guide, troubleshooting, conceptual explanation, etc.)
 - **Retrieves accurately**: Uses hybrid search (VectorDB + BM25) to find the most relevant documentation
