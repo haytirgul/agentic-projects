@@ -11,10 +11,10 @@ User Query
     ↓
 [Intent Classification] ← Classifies query intent and extracts metadata
     ↓
-[Hybrid Retrieval] ← Combines 2 search methods in parallel
+[Hybrid Retrieval] ← Combines 2-3 search methods in parallel
     ├── Vector Search (ChromaDB with HNSW)
     ├── BM25 Keyword Search
-    └── Web Search (Tavily API, online mode only - optional)
+    └── Web Search (Tavily API, online mode only)
     ↓
 [Deduplication] ← Removes duplicate text content
     ↓
