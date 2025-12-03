@@ -13,7 +13,7 @@
 The Opsfleet Documentation Assistant is a **multi-stage LangGraph agent** that:
 
 - **Understands intent**: Classifies user questions into 10 different intent types (implementation guide, troubleshooting, conceptual explanation, etc.)
-- **Retrieves accurately**: Uses hybrid search (VectorDB + BM25 + Fuzzy matching) to find the most relevant documentation
+- **Retrieves accurately**: Uses hybrid search (VectorDB + BM25) to find the most relevant documentation
 - **Answers with citations**: Generates responses with proper source citations from official docs
 - **Works offline**: Uses locally stored documentation (LangChain, LangGraph, LangSmith)
 - **Online mode**: Optionally supplements with real-time web search for latest information
@@ -21,7 +21,7 @@ The Opsfleet Documentation Assistant is a **multi-stage LangGraph agent** that:
 
 ### Key Features
 
-- **Hybrid RAG System**: Combines semantic search, keyword matching, and fuzzy matching for 85%+ accuracy
+- **Hybrid RAG System**: Combines semantic search and keyword matching for 85%+ accuracy
 - **Intent-Aware Retrieval**: Optimizes search based on question type
 - **Security-First**: Validates all inputs for prompt injection and harmful content
 - **Fast**: Sub-second retrieval with parallel search execution
@@ -130,7 +130,7 @@ TAVILY_API_KEY=your_tavily_api_key_here
 # Step 1: Build vector database and embeddings
 python scripts/data_pipeline/indexing/build_vector_index.py
 
-# Step 2: Build BM25 and fuzzy search components
+# Step 2: Build BM25 search components
 python scripts/data_pipeline/indexing/build_rag_components.py
 ```
 
@@ -320,7 +320,7 @@ AGENT_MODE=offline  # Default value
 
 **How it works:**
 1. User query → Intent classification → Parallel execution:
-   - Local retrieval (VectorDB + BM25 + Fuzzy)
+   - Local retrieval (VectorDB + BM25)
    - Web search (Tavily API)
 2. Results deduplicated (web doesn't duplicate local docs)
 3. Hybrid scoring combines local + web results
@@ -400,9 +400,9 @@ User Input
     ↓
 Security Gateway (ML-based prompt injection detection)
     ↓
-Intent Classification (parse + classify in single LLM call)
+Intent Classification
     ↓
-Hybrid Retrieval (VectorDB + BM25 + Fuzzy)
+Hybrid Retrieval (VectorDB + BM25)
     ↓
 Response Generation (with citations)
     ↓
@@ -416,8 +416,8 @@ Final Answer
 The agent is built as a **LangGraph state machine** with the following nodes:
 
 1. **security_gateway**: ML-based prompt injection detection
-2. **intent_classification**: Combined parsing + classification (single LLM call)
-3. **hybrid_retrieval**: Retrieve relevant documents (VectorDB + BM25 + Fuzzy)
+2. **intent_classification**: Classify user query into intent categories
+3. **hybrid_retrieval**: Retrieve relevant documents (VectorDB + BM25)
 4. **prepare_messages**: Inject retrieved docs into context
 5. **agent**: Generate response using LLM
 6. **finalize**: Extract final response from messages
@@ -427,10 +427,9 @@ The agent is built as a **LangGraph state machine** with the following nodes:
 10. **reset_for_next_turn**: Clear per-turn state, preserve history
 
 **Key Optimizations:**
-- **Single LLM call** for parsing + classification (was 2 calls, now 1)
-- **No tool-calling** during intent classification (simplified architecture)
 - **Parallel retrieval** for faster search
 - **Conversation memory** for context-aware responses
+- **Streaming responses** for better UX
 
 ### Intent Types
 
@@ -451,23 +450,28 @@ The system classifies questions into 10 categories:
 
 ### Hybrid Retrieval
 
-Combines three search methods for optimal accuracy:
+Combines two search methods for optimal accuracy:
 
 **Hybrid Scoring Formula:**
 
 ```python
+# Offline mode
 final_score = (
-    0.4 * bm25_score +      # Keyword matching (exact terms)
-    0.3 * vector_score +     # Semantic similarity (synonyms, paraphrases)
-    0.2 * fuzzy_score +      # Typo tolerance
-    0.1 * intent_boost       # Framework/language match bonus
+    0.7 * vector_score +     # Semantic similarity (synonyms, paraphrases)
+    0.3 * bm25_score         # Keyword matching (exact terms)
+)
+
+# Online mode (with web search)
+final_score = (
+    0.15 * vector_score +    # Semantic similarity
+    0.15 * bm25_score +      # Keyword matching
+    0.70 * web_bonus         # Web search results
 )
 ```
 
 **Why hybrid?**
 - **VectorDB**: Handles "save state" → "persistence" semantic matching
 - **BM25**: Handles exact technical terms like "StateGraph"
-- **Fuzzy**: Handles typos like "checkpoiter" → "checkpointer"
 
 **Performance:**
 - Retrieval: < 300ms
@@ -525,63 +529,49 @@ final_score = (
 ## Project Structure
 
 ```
-rag_agent/
+RAG_agent/
 ├── README.md                  # This file
+├── QUICK_START.md             # 5-minute setup guide
 ├── chatbot.py                 # Interactive CLI
 ├── settings.py                # Configuration
 ├── requirements.txt           # Dependencies
+├── init_project.py            # Automated setup script
 │
-├── src/                       # Core logic
-│   ├── graph/                 # LangGraph workflow
+├── src/                       # Core application logic
+│   ├── graph/                 # LangGraph workflow and state management
 │   ├── nodes/                 # Graph node implementations
-│   ├── rag/                   # RAG components
-│   ├── llm/                   # LLM client
-│   └── tools/                 # Agent tools
+│   ├── rag/                   # RAG components (vector search, BM25, web search)
+│   ├── llm/                   # LLM clients and workers
+│   ├── security/              # Security validation and prompt guards
+│   ├── tools/                 # Agent tools
+│   └── utils/                 # Utilities (timing, logging)
 │
-├── models/                    # Pydantic schemas
-├── prompts/                   # Prompt templates
-├── data/                      # Documentation and databases
-│   ├── output/json_files/     # 547 parsed docs
-│   └── output/chroma_db/      # Vector database
+├── models/                    # Pydantic data models
+├── prompts/                   # Prompt templates as Python modules
+├── scripts/                   # Data pipeline and utilities
+│   └── data_pipeline/         # Documentation ingestion and indexing
+│       ├── ingestion/         # Download and parse docs
+│       ├── indexing/          # Build vector and BM25 indices
+│       └── processing/        # Markdown to JSON conversion
 │
-├── tests/                     # Test suite
+├── data/                      # Data storage (excluded from git)
+│   ├── input/                 # Raw documentation files
+│   ├── output/json_files/     # Parsed documentation (~547 files)
+│   ├── vector_db/             # ChromaDB vector database
+│   └── rag_components/        # BM25 and document indices
+│
 └── documents/                 # Project documentation
-    ├── DEV_GUIDE.md           # Developer guide
     ├── ARCHITECTURE.md        # System architecture
-    ├── RAG_IMPLEMENTATION_PRD.md  # RAG details
-    └── task.md                # Original assignment
+    ├── DEV_GUIDE.md           # Developer guide
+    ├── RAG_README.md          # RAG implementation details
+    ├── SECURITY_README.md     # Security features
+    ├── SETUP.md               # Setup instructions
+    └── INDEX.md               # Documentation index
 ```
 
 ---
 
 ## Development
-
-### Running Tests
-
-```bash
-# All tests
-pytest tests/ -v
-
-# Specific test file
-pytest tests/test_graph.py -v
-
-# With coverage
-pytest tests/ --cov=src --cov-report=html
-```
-
-### Code Quality
-
-```bash
-# Format code
-black . --line-length=100
-isort . --profile=black
-
-# Lint
-ruff check . --select=E,F,I,N,W,UP,B,A,C4,SIM
-
-# Type checking
-mypy src/ --strict --ignore-missing-imports
-```
 
 ### Rebuilding Vector Index
 
@@ -625,11 +615,11 @@ python scripts/test_vector_search.py
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `VECTOR_WEIGHT` | No | `0.25` | Vector search weight (online mode) |
-| `BM25_WEIGHT` | No | `0.25` | BM25 search weight (online mode) |
-| `WEB_BONUS` | No | `0.5` | Web search bonus (online mode) |
-| `VECTOR_WEIGHT_OFFLINE` | No | `0.8` | Vector weight (offline mode) |
-| `BM25_WEIGHT_OFFLINE` | No | `0.2` | BM25 weight (offline mode) |
+| `VECTOR_WEIGHT` | No | `0.15` | Vector search weight (online mode) |
+| `BM25_WEIGHT` | No | `0.15` | BM25 search weight (online mode) |
+| `WEB_BONUS` | No | `0.7` | Web search bonus (online mode) |
+| `VECTOR_WEIGHT_OFFLINE` | No | `0.7` | Vector weight (offline mode) |
+| `BM25_WEIGHT_OFFLINE` | No | `0.3` | BM25 weight (offline mode) |
 
 #### Advanced Settings
 
@@ -652,37 +642,25 @@ python scripts/test_vector_search.py
 
 ### Model Configuration
 
-**Default Models** (Google Gemini free tier):
+**Model Tiers** (configured in [settings.py](settings.py)):
 
-- **Parsing/Validation**: `gemini-1.5-flash-002`
-- **Intent Classification**: `gemini-1.5-flash-002`
-- **Response Generation**: `gemini-1.5-flash-002`
-- **Embeddings**: `models/embedding-001`
+The system uses three model tiers for different operations:
 
-**For production**, consider:
-- Fast operations: `claude-haiku-3-5` or `gemini-flash`
-- Complex operations: `claude-sonnet-3-5` or `gemini-pro`
+- **Fast Model**: `gemini-2.5-flash-lite` - Quick operations (parsing, validation)
+- **Intermediate Model**: `gemini-2.5-flash` - Balanced operations (intent classification)
+- **Slow Model**: `gemini-2.5-pro` - Complex operations (response generation)
+- **Embeddings**: `sentence-transformers/all-MiniLM-L6-v2` (local model)
 
----
+**Customization:**
 
-## Performance
+You can override model selections via environment variables:
 
-### Metrics
-
-| Metric | Target | Actual |
-|--------|--------|--------|
-| End-to-end latency | < 5s | 3-4s |
-| Retrieval latency | < 300ms | ~100-200ms |
-| Precision@5 | > 80% | 85%+ |
-| LLM calls per query | < 5 | 3-5 |
-| Memory usage | < 1GB | ~850MB |
-
-### Optimizations
-
-- **Parallel retrieval**: VectorDB, BM25, and Fuzzy searches run concurrently
-- **In-memory caching**: Document index loaded once at startup
-- **Embedding cache**: Precomputed embeddings for fast search
-- **Lazy initialization**: Components loaded on first use
+```bash
+MODEL_FAST=gemini-2.5-flash-lite
+MODEL_INTERMEDIATE=gemini-2.5-flash
+MODEL_SLOW=gemini-2.5-pro
+EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L6-v2
+```
 
 ---
 
@@ -699,8 +677,8 @@ python --version
 
 # If < 3.10, install Python 3.11+ from python.org
 # Or use conda/pyenv to create a new environment
-conda create -n opsfleet python=3.11
-conda activate opsfleet
+conda create -n rag_agent python=3.11
+conda activate rag_agent
 ```
 
 #### "Failed to install dependencies"
@@ -752,10 +730,13 @@ huggingface-cli download protectai/deberta-v3-base-prompt-injection-v2
 
 **Check if RAG index is built:**
 ```bash
-# Verify vector database
-python -c "import chromadb; c=chromadb.PersistentClient('./data/vector_db'); print('Docs:', c.get_collection('documentation_embeddings').count())"
+# Verify vector database exists
+ls data/vector_db/
 
-# If 0, rebuild indices
+# Verify RAG components exist
+ls data/rag_components/
+
+# If missing, rebuild indices
 python scripts/data_pipeline/indexing/build_vector_index.py
 python scripts/data_pipeline/indexing/build_rag_components.py
 ```
@@ -788,42 +769,6 @@ python -c "from src.rag.web_search_api import WebSearchEngine; ws=WebSearchEngin
 **Tavily Free Tier:**
 - 1,000 searches per month
 
-### Performance Issues
-
-#### "Retrieval takes too long (>3 seconds)"
-
-**Optimization steps:**
-1. **Check parallel execution:**
-   ```bash
-   # Enable all optimizations
-   export ENABLE_STREAMING=true
-   export LAZY_INITIALIZATION=true
-   ```
-
-2. **Reduce search scope:**
-   ```bash
-   # Edit settings.py or .env
-   export TOP_K_RETRIEVAL=20  # Reduce from default 25
-   ```
-
-3. **Profile performance:**
-   ```python
-   import time
-   from src.rag.vector_search import VectorSearch
-
-   start = time.time()
-   results = VectorSearch().search("your query")
-   print(f"Search took: {time.time() - start:.2f}s")
-   ```
-
-#### "High memory usage"
-
-**Solutions:**
-- Use `sentence-transformers/all-MiniLM-L6-v2` (smaller than Google embeddings)
-- Enable lazy initialization: `LAZY_INITIALIZATION=true`
-- Restart the application periodically
-- Monitor with `ps aux | grep python`
-
 ### Common Error Messages
 
 #### "ModuleNotFoundError: No module named 'X'"
@@ -854,7 +799,7 @@ export CUDA_VISIBLE_DEVICES=""
 ```bash
 # Enable detailed logging
 export LOG_LEVEL=DEBUG
-python chatbot.py 2>&1 | tee debug.log
+python chatbot.py
 ```
 
 **Check initialization logs:**
@@ -910,16 +855,17 @@ python init_project.py
 
 ### For Users
 
-- `README.md` - This file (quickstart, usage examples)
-- `documents/task.md` - Original assignment requirements
+- [README.md](README.md) - This file (quickstart, usage examples)
+- [QUICK_START.md](QUICK_START.md) - 5-minute setup guide
 
 ### For Developers
 
-- `documents/DEV_GUIDE.md` - Comprehensive developer guide
-- `documents/ARCHITECTURE.md` - System architecture and design
-- `documents/RAG_IMPLEMENTATION_PRD.md` - RAG implementation details
-- `documents/GRAPH_DIAGRAM.md` - Visual graph structure
-- `documents/nodes.md` - Node specifications
+- [documents/DEV_GUIDE.md](documents/DEV_GUIDE.md) - Comprehensive developer guide
+- [documents/ARCHITECTURE.md](documents/ARCHITECTURE.md) - System architecture and design
+- [documents/RAG_README.md](documents/RAG_README.md) - RAG implementation details
+- [documents/SECURITY_README.md](documents/SECURITY_README.md) - Security features
+- [documents/SETUP.md](documents/SETUP.md) - Setup instructions
+- [documents/INDEX.md](documents/INDEX.md) - Documentation index
 
 ---
 
@@ -975,4 +921,4 @@ For issues, questions, or contributions:
 
 ---
 
-**Built by Opsfleet Team | Last Updated: 2025-11-30**
+**Built by Hay Hoffman | Last Updated: 2025-12-03**

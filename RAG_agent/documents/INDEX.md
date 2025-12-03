@@ -1,7 +1,8 @@
 # Documentation Index
 
-**Project**: Opsfleet Documentation Assistant
-**Last Updated**: 2025-11-30
+**Project**: RAG Documentation Assistant
+**Author**: Hay Hoffman
+**Last Updated**: 2025-12-03
 
 ---
 
@@ -188,9 +189,9 @@ This directory contains all core project documentation, organized by purpose and
 
 | Document | Status | Last Updated | Size |
 |----------|--------|--------------|------|
-| README.md | ✅ Production | 2025-11-30 | 14KB |
-| DEV_GUIDE.md | ✅ Production | 2025-11-30 | 23KB |
-| ARCHITECTURE.md | ⚠️ Needs Update | 2025-11-25 | 30KB |
+| README.md | ✅ Production | 2025-12-03 | 14KB |
+| DEV_GUIDE.md | ✅ Production | 2025-12-03 | 23KB |
+| ARCHITECTURE.md | ✅ Production | 2025-12-03 | 30KB |
 | RAG_IMPLEMENTATION_PRD.md | ✅ Production | 2025-11-28 | 66KB |
 | ARCHITECTURE_AND_LEARNING_GUIDE.md | ✅ Complete | 2025-11-27 | 48KB |
 | GRAPH_DIAGRAM.md | ✅ Complete | 2025-11-25 | 16KB |

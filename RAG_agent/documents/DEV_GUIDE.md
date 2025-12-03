@@ -1,7 +1,8 @@
-# Developer Guide - Opsfleet Documentation Assistant
+# Developer Guide - RAG Documentation Assistant
 
 **Version**: 3.0
-**Last Updated**: 2025-11-30
+**Last Updated**: 2025-12-03
+**Author**: Hay Hoffman
 **Audience**: Developers and AI Agents working on this codebase
 
 ---
@@ -74,9 +75,9 @@ rag_agent/
 │   │   └── state.py               # State management schemas
 │   │
 │   ├── nodes/                     # Graph node implementations
-│   │   ├── preprocessing.py       # Request parsing and validation
+│   │   ├── security_gateway.py    # Security validation
 │   │   ├── intent_classification.py  # Intent analysis agent
-│   │   ├── hybrid_retrieval.py    # RAG retrieval (VectorDB + BM25 + Fuzzy)
+│   │   ├── hybrid_retrieval_vector.py # RAG retrieval (VectorDB + BM25)
 │   │   └── agent_response.py      # Response generation
 │   │
 │   ├── rag/                       # RAG components
