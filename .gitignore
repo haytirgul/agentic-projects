@@ -1,0 +1,73 @@
+# IDE and Editor Settings
+.claude/
+.cursorrules
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environments
+venv/
+env/
+ENV/
+.venv
+
+# Environment Variables
+.env
+.env.*
+*.env
+.env.local
+.env.*.local
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# Logs
+*.log
+
+# OS Files
+.DS_Store
+Thumbs.db
+
+# Data Directories
+data/
+**/data/
+
+# ChromaDB and Vector Stores
+chroma_db/
+*.db
+
+# Model Caches
+sentence_transformers_cache/
+**/sentence_transformers_cache/
+huggingface_cache/
+**/huggingface_cache/
+
+# Jupyter Notebooks
+.ipynb_checkpoints
