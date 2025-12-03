@@ -5,11 +5,8 @@ import sys
 from pathlib import Path
 from typing import Tuple
 
-# Fix Windows console encoding for Unicode characters
-if sys.platform == "win32":
-    import io
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
-    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
+# Note: Removed Windows console encoding setup to avoid I/O errors when imported as module
+# All Unicode symbols have been replaced with ASCII equivalents
 
 # Add project root to path for imports
 project_root = Path(__file__).resolve().parent.parent.parent.parent
@@ -193,7 +190,7 @@ def main() -> int:
         print(f"\n[OK] Successfully parsed {success_count} file(s)")
         return 0
     else:
-        print(f"\n⚠ Parsed {success_count} out of {total_count} file(s)")
+        print(f"\n[WARNING] Parsed {success_count} out of {total_count} file(s)")
         return 1 if success_count == 0 else 0
 
 

@@ -153,7 +153,7 @@ OPTIMIZED_INTENT_CLASSIFICATION=true
 ENABLE_STREAMING=true
 """
             env_file.write_text(template)
-            logger.warning("⚠ .env file created with template. Please update with your API keys!")
+            logger.warning("[WARNING] .env file created with template. Please update with your API keys!")
             logger.warning(f"   Edit: {env_file}")
             return False
 
@@ -164,7 +164,7 @@ ENABLE_STREAMING=true
 
         google_api_key = os.getenv("GOOGLE_API_KEY")
         if not google_api_key or google_api_key == "your_google_api_key_here":
-            logger.warning("⚠ GOOGLE_API_KEY not set in .env file")
+            logger.warning("[WARNING] GOOGLE_API_KEY not set in .env file")
             logger.warning("   The agent requires a valid Google API key")
             return False
 
@@ -237,6 +237,62 @@ ENABLE_STREAMING=true
             logger.error(f"Failed to initialize embedding model: {e}")
             return False
 
+    def _reorganize_langchain_directories(self, md_dir: Path, json_dir: Path):
+        """Reorganize langchain directories to match reference structure.
+
+        Creates structure to match reference:
+            langchain/oss/javascript/ (kept)
+            langchain/oss/python/ (kept)
+            langchain/javascript/ (copied from oss/javascript)
+            langchain/python/ (copied from oss/python)
+            langsmith/ (moved from langchain/langsmith to top level)
+
+        Args:
+            md_dir: Markdown files directory
+            json_dir: JSON files directory
+        """
+        import shutil
+
+        for base_dir in [md_dir, json_dir]:
+            langchain_dir = base_dir / "langchain"
+
+            if not langchain_dir.exists():
+                continue
+
+            # Step 1: Copy javascript and python from oss to top level (keep oss directory)
+            oss_dir = langchain_dir / "oss"
+            if oss_dir.exists():
+                for subdir_name in ["javascript", "python"]:
+                    source_dir = oss_dir / subdir_name
+                    target_dir = langchain_dir / subdir_name
+
+                    if source_dir.exists() and source_dir.is_dir():
+                        # If target already exists, remove it first
+                        if target_dir.exists():
+                            shutil.rmtree(target_dir)
+
+                        # Copy the directory (not move, to keep both structures)
+                        shutil.copytree(str(source_dir), str(target_dir))
+                        logger.info(f"Copied {source_dir} -> {target_dir}")
+
+            # Step 2: Move langsmith from langchain/langsmith to top level langsmith/
+            langsmith_source = langchain_dir / "langsmith"
+            langsmith_target = base_dir / "langsmith"
+
+            if langsmith_source.exists() and langsmith_source.is_dir():
+                # If target already exists, remove it first
+                if langsmith_target.exists():
+                    shutil.rmtree(langsmith_target)
+
+                # Move (not copy) langsmith to top level
+                shutil.move(str(langsmith_source), str(langsmith_target))
+                logger.info(f"Moved {langsmith_source} -> {langsmith_target}")
+
+                # Ensure source is deleted (shutil.move should do this, but double-check)
+                if langsmith_source.exists():
+                    shutil.rmtree(langsmith_source)
+                    logger.info(f"Cleaned up remaining {langsmith_source}")
+
     def step_7_download_documentation(self) -> bool:
         """Step 7: Download and process documentation."""
         self.print_step(7, "Downloading and Processing Documentation")
@@ -306,6 +362,15 @@ ENABLE_STREAMING=true
             if not json_dir.exists() or len(list(json_dir.rglob("*.json"))) == 0:
                 logger.error("No processed documentation found")
                 return False
+
+            # Reorganize directory structure to match reference format
+            logger.info("Reorganizing directory structure...")
+            try:
+                self._reorganize_langchain_directories(md_dir, json_dir)
+                logger.info("Directory structure reorganized successfully")
+            except Exception as e:
+                logger.warning(f"Failed to reorganize directories: {e}")
+                # Don't fail the entire step if reorganization fails
 
             logger.info("[OK] Documentation downloaded and processed")
             return True
@@ -484,14 +549,14 @@ ENABLE_STREAMING=true
 
         if self.success_count == self.total_steps:
             print("\n" + "=" * 80)
-            print("  🎉 PROJECT INITIALIZATION COMPLETE!")
+            print("  PROJECT INITIALIZATION COMPLETE!")
             print("=" * 80)
             print("\nYou can now run the chatbot:")
             print("  python chatbot.py")
             return True
         else:
             print("\n" + "=" * 80)
-            print("  ⚠ INITIALIZATION INCOMPLETE")
+            print("  [WARNING] INITIALIZATION INCOMPLETE")
             print("=" * 80)
             print(f"\n{self.total_steps - self.success_count} step(s) failed. Check the logs above.")
             print(f"See init_project.log for detailed information.")
