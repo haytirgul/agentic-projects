@@ -44,8 +44,8 @@ __all__ = [
     "RERANKING_ENABLED",
 
     # Vector store settings
-    "CHROMA_PERSIST_DIRECTORY",
-    "COLLECTION_NAME",
+    "VECTOR_DB_PERSIST_DIRECTORY",
+    "VECTOR_DB_COLLECTION_NAME",
 
     # Conversation memory settings
     "MAX_HISTORY_TURNS",
@@ -159,9 +159,9 @@ RERANKING_ENABLED = os.getenv("RERANKING_ENABLED", "true").lower() == "true"
 # VECTOR STORE SETTINGS
 # ============================================================================
 
-# ChromaDB settings
-CHROMA_PERSIST_DIRECTORY = str(VECTOR_DB_DIR)
-COLLECTION_NAME = "code_chunks"
+# Vector database settings (FAISS)
+VECTOR_DB_PERSIST_DIRECTORY = str(VECTOR_DB_DIR)
+VECTOR_DB_COLLECTION_NAME = "code_chunks"
 
 # ============================================================================
 # CONVERSATION MEMORY SETTINGS

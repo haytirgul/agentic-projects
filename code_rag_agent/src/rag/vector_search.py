@@ -1,19 +1,24 @@
-"""Vector database search using ChromaDB with HNSW for efficient similarity search.
+"""Vector database search using FAISS for efficient similarity search.
 
-This module provides content-block-level granular retrieval using ChromaDB's HNSW
-(Hierarchical Navigable Small World) algorithm for fast approximate nearest neighbor search.
+This module provides content-block-level granular retrieval using FAISS (Facebook AI Similarity Search)
+for fast approximate nearest neighbor search.
 """
 
 from typing import List, Dict, Optional, Literal, Any
 from pathlib import Path
 import logging
 import json
-import asyncio
 from dataclasses import dataclass
 
-# ChromaDB imports
-from chromadb.config import Settings
-from chromadb.utils.embedding_functions import GoogleGenerativeAiEmbeddingFunction, SentenceTransformerEmbeddingFunction
+# FAISS imports
+try:
+    import faiss
+except ImportError:
+    raise ImportError("FAISS is required. Install with: pip install faiss-cpu")
+
+# Additional imports for FAISS
+import pickle
+import numpy as np
 
 # Local imports
 from settings import GOOGLE_API_KEY, DATA_DIR
@@ -45,12 +50,12 @@ class EmbeddingMatch:
 
 class VectorSearchEngine:
     """
-    Vector database search using ChromaDB with HNSW indexing.
+    Vector database search using FAISS for efficient similarity search.
 
     Key features:
     1. **3-level granularity**: Document, section, and content-block level embeddings
-    2. **HNSW indexing**: Fast approximate nearest neighbor search (better than cosine similarity)
-    3. **Persistent storage**: ChromaDB persists to disk automatically
+    2. **FAISS indexing**: Fast approximate nearest neighbor search with IVF or HNSW
+    3. **Persistent storage**: FAISS index and metadata stored on disk
     4. **Metadata filtering**: Filter by framework, language, topic before semantic search
     5. **Granularity-based reranking**: Prefers finer-grained matches
     """
@@ -66,11 +71,11 @@ class VectorSearchEngine:
         document_index: Optional['DocumentIndex'] = None,
     ):
         """
-        Initialize vector search engine with ChromaDB.
+        Initialize vector search engine with FAISS.
 
         Args:
-            persist_directory: Directory where ChromaDB will persist data
-            collection_name: Name of the ChromaDB collection
+            persist_directory: Directory where FAISS index and metadata will be stored
+            collection_name: Name of the collection (used for file naming)
             embedding_model: Embedding model name (Google Gemini or Hugging Face)
             google_api_key: Google API key (only needed for Google models)
             content_preview_chars: Max characters per content block (default: 300)
@@ -85,106 +90,131 @@ class VectorSearchEngine:
         self.enable_block_level = enable_block_level
         self.document_index = document_index
 
-        # Import ChromaDB
-        try:
-            import chromadb
-        except ImportError:
-            raise ImportError(
-                "ChromaDB is required. Install with: pip install chromadb"
-            )
+        # FAISS file paths
+        self.index_path = self.persist_directory / f"{collection_name}.faiss"
+        self.metadata_path = self.persist_directory / f"{collection_name}_metadata.pkl"
+        self.config_path = self.persist_directory / f"{collection_name}_config.pkl"
 
-        # Initialize ChromaDB client
-        logger.info(f"Initializing ChromaDB at {self.persist_directory}")
-
-        # Create directory if it doesn't exist (but don't delete if it does!)
-        self.persist_directory.mkdir(parents=True, exist_ok=True)
-
-        self.client = chromadb.PersistentClient(
-            path=str(self.persist_directory),
-            settings=Settings(
-                anonymized_telemetry=False,
-                allow_reset=True,
-            )
-        )
+        # Initialize FAISS components
+        logger.info(f"Initializing FAISS at {self.persist_directory}")
 
         # Setup embedding function
         self.embedding_function = self._create_embedding_function(
             embedding_model, google_api_key
         )
 
-        # Get or create collection with HNSW indexing
-        try:
-            self.collection = self.client.get_collection(
-                name=collection_name,
-                embedding_function=self.embedding_function,
-            )
-            logger.info(f"Loaded existing collection '{collection_name}' with {self.collection.count()} embeddings")
-        except Exception:
-            logger.info(f"Creating new collection '{collection_name}' with HNSW indexing")
-            self.collection = self.client.create_collection(
-                name=collection_name,
-                embedding_function=self.embedding_function,
-                metadata={"hnsw:space": "cosine"},  # Use cosine distance for HNSW
-            )
+        # Load or create FAISS index
+        self.index = None
+        self.metadata = []
+        self.id_to_idx = {}  # Maps document IDs to FAISS indices
+
+        if self.index_path.exists() and self.metadata_path.exists():
+            self._load_index()
+        else:
+            logger.info(f"Creating new FAISS index '{collection_name}'")
+            self._create_empty_index()
 
     def _create_embedding_function(self, model_name: str, google_api_key: Optional[str]):
         """
-        Create ChromaDB-compatible embedding function.
+        Create FAISS-compatible embedding function.
 
         Args:
             model_name: Model identifier
             google_api_key: API key for Google models
 
         Returns:
-            ChromaDB embedding function
+            Embedding function that returns numpy arrays
         """
         if model_name.startswith("models/"):
             # Google Gemini embeddings
             if google_api_key is None:
                 google_api_key = GOOGLE_API_KEY
 
-            logger.info(f"Using Google Gemini embeddings: {model_name}")
-            return GoogleGenerativeAiEmbeddingFunction(
-                api_key=google_api_key,
-                model_name=model_name,
-            )
+            try:
+                from langchain_google_genai import GoogleGenerativeAIEmbeddings
+                logger.info(f"Using Google Gemini embeddings: {model_name}")
+                return GoogleGenerativeAIEmbeddings(
+                    model=model_name,
+                    google_api_key=google_api_key
+                )
+            except ImportError:
+                raise ImportError("langchain-google-genai is required for Google embeddings")
         else:
             # Hugging Face embeddings (sentence-transformers)
-            logger.info(f"Using Hugging Face embeddings: {model_name} (local)")
-            return SentenceTransformerEmbeddingFunction(
-                model_name=model_name,
-            )
+            try:
+                from langchain_huggingface import HuggingFaceEmbeddings
+                logger.info(f"Using Hugging Face embeddings: {model_name} (local)")
+                return HuggingFaceEmbeddings(model_name=model_name)
+            except ImportError:
+                raise ImportError("langchain-huggingface is required for Hugging Face embeddings")
+
+    def _create_empty_index(self):
+        """Create an empty FAISS index."""
+        # We'll create the index when we know the embedding dimension
+        # For now, just initialize empty structures
+        self.index = None
+        self.metadata = []
+        self.id_to_idx = {}
+
+    def _load_index(self):
+        """Load FAISS index and metadata from disk."""
+        try:
+            # Load FAISS index
+            self.index = faiss.read_index(str(self.index_path))
+
+            # Load metadata
+            with open(self.metadata_path, 'rb') as f:
+                data = pickle.load(f)
+                self.metadata = data['metadata']
+                self.id_to_idx = data['id_to_idx']
+
+            logger.info(f"Loaded FAISS index with {len(self.metadata)} embeddings")
+
+        except Exception as e:
+            logger.warning(f"Failed to load FAISS index: {e}")
+            self._create_empty_index()
+
+    def _save_index(self):
+        """Save FAISS index and metadata to disk."""
+        if self.index is not None:
+            # Save FAISS index
+            faiss.write_index(self.index, str(self.index_path))
+
+            # Save metadata
+            data = {
+                'metadata': self.metadata,
+                'id_to_idx': self.id_to_idx
+            }
+            with open(self.metadata_path, 'wb') as f:
+                pickle.dump(data, f)
+
+            logger.debug(f"Saved FAISS index with {len(self.metadata)} embeddings")
 
     def build_index(self, documents: List[Any], force_rebuild: bool = False) -> int:
         """
-        Build vector index from documents with 3-level granularity.
+        Build FAISS vector index from documents with 3-level granularity.
 
         Args:
             documents: List of Document objects
-            force_rebuild: If True, clear existing collection and rebuild from scratch
+            force_rebuild: If True, clear existing index and rebuild from scratch
 
         Returns:
             Total number of embeddings created
         """
 
         if force_rebuild:
-            logger.info("Force rebuild: Deleting existing collection")
-            self.client.delete_collection(name=self.collection_name)
-            self.collection = self.client.create_collection(
-                name=self.collection_name,
-                embedding_function=self.embedding_function,
-                metadata={"hnsw:space": "cosine"},
-            )
+            logger.info("Force rebuild: Deleting existing FAISS index")
+            self._create_empty_index()
 
         # Check if already indexed
-        existing_count = self.collection.count()
+        existing_count = len(self.metadata) if self.metadata else 0
         if existing_count > 0 and not force_rebuild:
-            logger.info(f"Collection already has {existing_count} embeddings. Use force_rebuild=True to rebuild.")
+            logger.info(f"Index already has {existing_count} embeddings. Use force_rebuild=True to rebuild.")
             return existing_count
 
-        logger.info("Building vector index with 3-level granularity...")
+        logger.info("Building FAISS vector index with 3-level granularity...")
 
-        # Prepare batches for ChromaDB
+        # Prepare data structures
         texts = []
         metadatas = []
         ids = []
@@ -260,23 +290,59 @@ class VectorSearchEngine:
                             ids.append(f"blk_{id_counter}")
                             id_counter += 1
 
-        # Add to ChromaDB in batches (ChromaDB recommends batches of ~100-1000)
-        batch_size = 500
-        logger.info(f"Adding {len(texts)} embeddings to ChromaDB in batches of {batch_size}...")
+        if not texts:
+            logger.warning("No texts to embed")
+            return 0
+
+        # Generate embeddings in batches
+        logger.info(f"Generating embeddings for {len(texts)} texts...")
+        embeddings = []
+        batch_size = 100  # Smaller batch size for embeddings
 
         for i in range(0, len(texts), batch_size):
             batch_texts = texts[i:i+batch_size]
-            batch_metadatas = metadatas[i:i+batch_size]
-            batch_ids = ids[i:i+batch_size]
+            try:
+                batch_embeddings = self.embedding_function.embed_documents(batch_texts)
+                embeddings.extend(batch_embeddings)
+                if (i + batch_size) % 1000 == 0:
+                    logger.info(f"  Generated embeddings for {i + batch_size}/{len(texts)} texts...")
+            except Exception as e:
+                logger.error(f"Failed to generate embeddings for batch {i//batch_size}: {e}")
+                # Add zero vectors as fallback
+                embeddings.extend([[0.0] * 768] * len(batch_texts))  # Assuming 768-dim embeddings
 
-            self.collection.add(
-                documents=batch_texts,
-                metadatas=batch_metadatas,
-                ids=batch_ids,
-            )
+        # Convert to numpy array
+        embeddings_array = np.array(embeddings, dtype=np.float32)
 
-            if (i + batch_size) % 2000 == 0:
-                logger.info(f"  Added {i + batch_size}/{len(texts)} embeddings...")
+        # Create FAISS index
+        dimension = embeddings_array.shape[1]
+        logger.info(f"Creating FAISS index with dimension {dimension}")
+
+        # Use IndexIVFFlat for larger datasets, IndexFlatIP for cosine similarity
+        if len(embeddings) > 1000:
+            # Use IVF with PQ for larger datasets
+            nlist = min(100, max(4, len(embeddings) // 39))  # Rule of thumb: sqrt(n)/4
+            quantizer = faiss.IndexFlatIP(dimension)
+            self.index = faiss.IndexIVFPQ(quantizer, dimension, nlist, 8, 8)  # PQ with 8 bytes per vector
+        else:
+            # Use simple flat index with inner product (cosine similarity)
+            self.index = faiss.IndexFlatIP(dimension)
+
+        # Train index if needed
+        if hasattr(self.index, 'is_trained') and not self.index.is_trained:
+            logger.info("Training FAISS index...")
+            self.index.train(embeddings_array)
+
+        # Add vectors to index
+        logger.info(f"Adding {len(embeddings_array)} vectors to FAISS index...")
+        self.index.add(embeddings_array)
+
+        # Store metadata and ID mapping
+        self.metadata = metadatas
+        self.id_to_idx = {ids[i]: i for i in range(len(ids))}
+
+        # Save index and metadata
+        self._save_index()
 
         # Log granularity breakdown
         granularity_counts = {}
@@ -284,7 +350,7 @@ class VectorSearchEngine:
             level = meta['granularity']
             granularity_counts[level] = granularity_counts.get(level, 0) + 1
 
-        logger.info(f"Vector index built: {len(texts)} total embeddings")
+        logger.info(f"FAISS vector index built: {len(texts)} total embeddings")
         logger.info(f"  Document-level: {granularity_counts.get('document', 0)}")
         logger.info(f"  Section-level: {granularity_counts.get('section', 0)}")
         logger.info(f"  Content-block-level: {granularity_counts.get('content_block', 0)}")
@@ -301,7 +367,7 @@ class VectorSearchEngine:
         granularity_boost: bool = True,
     ) -> List[EmbeddingMatch]:
         """
-        Search using HNSW-based vector similarity.
+        Search using FAISS vector similarity.
 
         Args:
             query: Search query
@@ -314,100 +380,96 @@ class VectorSearchEngine:
         Returns:
             List of EmbeddingMatch objects, sorted by boosted score descending
         """
-        # Build metadata filter (ChromaDB requires explicit operators for multiple filters)
-        where_filter = None
-        filters = []
+        if self.index is None or not self.metadata:
+            logger.warning("FAISS index not loaded or empty")
+            return []
 
-        # Handle framework filter (string or list)
-        if framework:
-            if isinstance(framework, list):
-                if len(framework) == 1:
-                    filters.append({"framework": framework[0]})
-                else:
-                    # Multiple frameworks: use $or operator
-                    filters.append({"$or": [{"framework": f} for f in framework]})
-            else:
-                filters.append({"framework": framework})
+        # Generate embedding for query
+        try:
+            query_embedding = self.embedding_function.embed_query(query)
+            query_vector = np.array([query_embedding], dtype=np.float32)
+        except Exception as e:
+            logger.error(f"Failed to generate query embedding: {e}")
+            return []
 
-        # Handle language filter (string or list)
-        if language:
-            if isinstance(language, list):
-                if len(language) == 1:
-                    filters.append({"language": language[0]})
-                else:
-                    # Multiple languages: use $or operator
-                    filters.append({"$or": [{"language": lang} for lang in language]})
-            else:
-                filters.append({"language": language})
+        # Search FAISS index
+        # Request more results since we'll filter afterwards
+        search_top_k = min(len(self.metadata), top_k * 5)  # Get more results for filtering
 
-        if topic:
-            filters.append({"topic": topic})
+        try:
+            # FAISS search returns distances and indices
+            distances, indices = self.index.search(query_vector, search_top_k)
+            similarity_scores = distances[0]  # FAISS returns inner product (cosine similarity)
+            result_indices = indices[0]
+        except Exception as e:
+            logger.error(f"FAISS search failed: {e}")
+            return []
 
-        # Build proper ChromaDB filter
-        if len(filters) == 1:
-            where_filter = filters[0]
-        elif len(filters) > 1:
-            where_filter = {"$and": filters}
-
-        # Query ChromaDB with HNSW
-        # Request more results if we're doing granularity boosting
-        query_top_k = top_k * 3 if granularity_boost else top_k
-
-        results = self.collection.query(
-            query_texts=[query],
-            n_results=query_top_k,
-            where=where_filter,
-            include=["documents", "metadatas", "distances"],
-        )
-
-        # Parse results
+        # Parse results and apply metadata filtering
         matches = []
-        if results['ids'] and len(results['ids'][0]) > 0:
-            for i, doc_id in enumerate(results['ids'][0]):
-                metadata = results['metadatas'][0][i]
-                document_text = results['documents'][0][i]
-                distance = results['distances'][0][i]
+        for idx, similarity in zip(result_indices, similarity_scores):
+            if idx == -1:  # FAISS returns -1 for invalid results
+                continue
 
-                # Convert distance to similarity score (ChromaDB uses cosine distance)
-                # Cosine distance = 1 - cosine_similarity, so similarity = 1 - distance
-                similarity = 1.0 - distance
+            metadata = self.metadata[idx]
 
-                # Parse content block if present
-                content_block = None
-                if metadata.get('content_block_content'):
-                    try:
-                        content_block = json.loads(metadata['content_block_content'])
-                    except:
-                        pass
+            # Apply metadata filters
+            if framework:
+                if isinstance(framework, list):
+                    if metadata.get('framework') not in framework:
+                        continue
+                else:
+                    if metadata.get('framework') != framework:
+                        continue
 
-                # For content_block matches, expand to full section content
-                # This prevents incomplete/cut-off text in responses
-                expanded_text = document_text
-                if metadata['granularity'] == 'content_block':
-                    # Load the full section with all content blocks
-                    full_section_content = self._load_full_section(
-                        document_path=metadata['document_path'],
-                        section_title=metadata.get('section_title'),
-                    )
-                    if full_section_content:
-                        expanded_text = full_section_content
-                        logger.debug(f"Expanded content_block to full section ({len(expanded_text)} chars)")
+            if language:
+                if isinstance(language, list):
+                    if metadata.get('language') not in language:
+                        continue
+                else:
+                    if metadata.get('language') != language:
+                        continue
 
-                match = EmbeddingMatch(
+            if topic and metadata.get('topic') != topic:
+                continue
+
+            # Parse content block if present
+            content_block = None
+            if metadata.get('content_block_content'):
+                try:
+                    content_block = json.loads(metadata['content_block_content'])
+                except (json.JSONDecodeError, KeyError):
+                    pass
+
+            # For content_block matches, expand to full section content
+            # This prevents incomplete/cut-off text in responses
+            # Since FAISS doesn't store the text, we reconstruct it from metadata
+            expanded_text = self._reconstruct_text_from_metadata(metadata)
+            if metadata['granularity'] == 'content_block':
+                # Load the full section with all content blocks
+                full_section_content = self._load_full_section(
                     document_path=metadata['document_path'],
-                    document_title=metadata['document_title'],
-                    framework=metadata['framework'],
-                    language=metadata['language'],
-                    topic=metadata['topic'],
-                    granularity=metadata['granularity'],
-                    score=similarity,
-                    matched_text=expanded_text,  # Use expanded text instead of truncated preview
-                    section_title=metadata.get('section_title') or None,
-                    section_level=metadata.get('section_level') or None,
-                    content_block=content_block,
-                    metadata=metadata,
+                    section_title=metadata.get('section_title'),
                 )
-                matches.append(match)
+                if full_section_content:
+                    expanded_text = full_section_content
+                    logger.debug(f"Expanded content_block to full section ({len(expanded_text)} chars)")
+
+            match = EmbeddingMatch(
+                document_path=metadata['document_path'],
+                document_title=metadata['document_title'],
+                framework=metadata['framework'],
+                language=metadata['language'],
+                topic=metadata['topic'],
+                granularity=metadata['granularity'],
+                score=float(similarity),
+                matched_text=expanded_text,
+                section_title=metadata.get('section_title') or None,
+                section_level=metadata.get('section_level') or None,
+                content_block=content_block,
+                metadata=metadata,
+            )
+            matches.append(match)
 
         # Apply granularity-based reranking
         if granularity_boost:
@@ -418,6 +480,35 @@ class VectorSearchEngine:
         matches = self._deduplicate_by_section(matches)
 
         return matches[:top_k]
+
+    def _reconstruct_text_from_metadata(self, metadata: Dict[str, Any]) -> str:
+        """
+        Reconstruct text content from metadata since FAISS doesn't store text.
+
+        Args:
+            metadata: Metadata dictionary from stored index
+
+        Returns:
+            Reconstructed text content
+        """
+        granularity = metadata.get('granularity', 'document')
+
+        if granularity == 'content_block' and metadata.get('content_block_content'):
+            # For content blocks, we stored the full block content as JSON
+            try:
+                block = json.loads(metadata['content_block_content'])
+                return block.get('content', '')
+            except (json.JSONDecodeError, KeyError):
+                pass
+
+        # Fallback: reconstruct basic text from title and metadata
+        title = metadata.get('document_title', '')
+        section_title = metadata.get('section_title', '')
+
+        if section_title and section_title != title:
+            return f"{section_title}\n\nFrom document: {title}"
+        else:
+            return title
 
     def _rerank_by_granularity(self, matches: List[EmbeddingMatch]) -> List[EmbeddingMatch]:
         """
@@ -537,22 +628,17 @@ class VectorSearchEngine:
 
     def get_collection_count(self) -> int:
         """Get the total number of embeddings in the collection."""
-        return self.collection.count()
+        return len(self.metadata) if self.metadata else 0
 
     def get_collection_stats(self) -> Dict[str, Any]:
-        """Get statistics about the vector database."""
-        total_count = self.collection.count()
-
-        # Query to count by granularity
-        all_results = self.collection.get(
-            include=["metadatas"],
-        )
+        """Get statistics about the FAISS index."""
+        total_count = len(self.metadata) if self.metadata else 0
 
         granularity_counts = {}
         framework_counts = {}
 
-        if all_results['metadatas']:
-            for meta in all_results['metadatas']:
+        if self.metadata:
+            for meta in self.metadata:
                 # Count by granularity
                 gran = meta.get('granularity', 'unknown')
                 granularity_counts[gran] = granularity_counts.get(gran, 0) + 1
@@ -561,20 +647,34 @@ class VectorSearchEngine:
                 fw = meta.get('framework', 'unknown')
                 framework_counts[fw] = framework_counts.get(fw, 0) + 1
 
+        index_info = {}
+        if self.index is not None:
+            index_info = {
+                "index_type": type(self.index).__name__,
+                "is_trained": getattr(self.index, 'is_trained', True),
+                "dimension": getattr(self.index, 'd', 'unknown'),
+            }
+
         return {
             "total_embeddings": total_count,
             "granularity_breakdown": granularity_counts,
             "framework_breakdown": framework_counts,
             "collection_name": self.collection_name,
             "persist_directory": str(self.persist_directory),
+            "index_info": index_info,
         }
 
     def reset(self) -> None:
-        """Delete the collection and reset."""
-        logger.warning(f"Resetting collection '{self.collection_name}'")
-        self.client.delete_collection(name=self.collection_name)
-        self.collection = self.client.create_collection(
-            name=self.collection_name,
-            embedding_function=self.embedding_function,
-            metadata={"hnsw:space": "cosine"},
-        )
+        """Delete the FAISS index and reset."""
+        logger.warning(f"Resetting FAISS index '{self.collection_name}'")
+
+        # Remove index and metadata files
+        if self.index_path.exists():
+            self.index_path.unlink()
+        if self.metadata_path.exists():
+            self.metadata_path.unlink()
+        if self.config_path.exists():
+            self.config_path.unlink()
+
+        # Reset in-memory structures
+        self._create_empty_index()

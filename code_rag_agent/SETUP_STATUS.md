@@ -13,11 +13,10 @@
 - [x] `models/__init__.py` - Package initialization
 
 ### RAG Components (Needs Adaptation)
-- [x] `src/rag/vector_search.py` - ChromaDB vector search (**needs adaptation for code chunks**)
+- [x] `src/rag/vector_search.py` - FAISS vector search (**needs adaptation for code chunks**)
 - [x] `src/rag/bm25_search.py` - BM25 keyword search (**needs adaptation for code**)
 - [x] `src/rag/hybrid_scorer.py` - Hybrid scoring with RRF reranking
 - [x] `src/rag/document_index.py` - In-memory document index (**needs renaming to chunk_index**)
-- [x] `src/rag/deduplicator.py` - Result deduplication
 
 ### LLM Components
 - [x] `src/llm/llm.py` - LLM factory with Gemini support

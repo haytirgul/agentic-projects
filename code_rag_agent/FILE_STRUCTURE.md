@@ -58,11 +58,10 @@ code_rag_agent/
 │   │
 │   ├── rag/
 │   │   ├── __init__.py
-│   │   ├── vector_search.py    # ✅ ChromaDB vector search (needs adaptation)
+│   │   ├── vector_search.py    # ✅ FAISS vector search
 │   │   ├── bm25_search.py      # ✅ BM25 keyword search (needs adaptation)
 │   │   ├── hybrid_scorer.py    # ✅ Hybrid scoring + RRF reranking
-│   │   ├── document_index.py   # ✅ In-memory index (needs renaming)
-│   │   └── deduplicator.py     # ✅ Result deduplication
+│   │   └── document_index.py   # ✅ In-memory index (needs renaming)
 │   │
 │   ├── llm/
 │   │   ├── __init__.py
@@ -101,7 +100,6 @@ code_rag_agent/
 - `src/llm/llm.py` - LLM factory
 - `src/llm/workers.py` - Structured output
 - `src/rag/hybrid_scorer.py` - Hybrid scoring
-- `src/rag/deduplicator.py` - Deduplication
 - `src/utils/logger.py` - Logging
 - `settings.py` - Configuration
 - `requirements.txt` - Dependencies

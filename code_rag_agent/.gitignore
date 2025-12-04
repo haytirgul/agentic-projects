@@ -46,6 +46,9 @@ data/httpx/
 # Generated indices
 data/index/
 
+# Processed data
+data/processed/
+
 # RAG Components (pickle files)
 data/rag_components/
 

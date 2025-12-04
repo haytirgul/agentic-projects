@@ -3,9 +3,8 @@ Hybrid retrieval node using VectorDB (ChromaDB) for granular content-block retri
 
 Optimized for low latency with async/await for maximum parallelism.
 
-Supports both offline and online modes:
-- Offline: Uses only local documentation (VectorDB + BM25)
-- Online: Supplements with web search results from Tavily API
+Uses offline mode only:
+- Retrieves from local documentation using VectorDB + BM25 hybrid search
 """
 
 from typing import Any, List, Tuple, Optional
@@ -16,10 +15,9 @@ import hashlib
 import time
 from models.intent_classification import IntentClassification
 from src.graph.state import AgentState
-from models.rag_models import RetrievedDocument
 from src.rag.vector_search import VectorSearchEngine
 from src.rag.hybrid_scorer import HybridScorer
-from settings import DATA_DIR, EMBEDDING_MODEL, GOOGLE_API_KEY, AGENT_MODE, TAVILY_API_KEY
+from settings import DATA_DIR, EMBEDDING_MODEL, GOOGLE_API_KEY, AGENT_MODE
 
 logger = logging.getLogger(__name__)
 
@@ -27,8 +25,6 @@ logger = logging.getLogger(__name__)
 _index = None
 _bm25 = None
 _vector_search = None
-_query_generator = None
-_web_search = None
 _scorer = None
 
 # Retrieval result cache (in-memory with TTL)
@@ -107,7 +103,7 @@ def initialize_rag_components():
     vector_db_path = DATA_DIR / "vector_db"
 
     try:
-        logger.info("Initializing VectorDB search (ChromaDB with HNSW)...")
+        logger.info("Initializing VectorDB search (FAISS)...")
         _vector_search = VectorSearchEngine(
             persist_directory=vector_db_path,
             collection_name="documentation_embeddings",
@@ -128,18 +124,6 @@ def initialize_rag_components():
     except Exception as e:
         _vector_search = None
 
-    # Initialize web search components (only if online mode)
-    if AGENT_MODE == "online":
-        try:
-            from src.rag.web_search_query_generator import WebSearchQueryGenerator
-            from src.rag.web_search_api import WebSearchEngine
-
-            _query_generator = WebSearchQueryGenerator()
-            _web_search = WebSearchEngine(api_key=TAVILY_API_KEY)
-            logger.info("✓ Web search enabled (online mode)")
-        except Exception as e:
-            _query_generator = None
-            _web_search = None
 
     # Initialize hybrid scorer
     _scorer = HybridScorer()
@@ -228,55 +212,26 @@ async def _run_bm25_search_async(bm25_query: str) -> List[Tuple[Any, float]]:
 
 
 
-async def _run_web_search_async(cleaned_request: str, intent: IntentClassification) -> List[Any]:
-    """Run web search asynchronously (online mode only)."""
-    if AGENT_MODE != "online" or _web_search is None or _query_generator is None:
-        logger.debug("Skipping web search (offline mode or not initialized)")
-        return []
-
-    try:
-        loop = asyncio.get_event_loop()
-
-        # Generate queries
-        logger.debug("Generating web search queries...")
-        queries = await loop.run_in_executor(
-            None,
-            lambda: _query_generator.generate_queries(cleaned_request, intent)
-        )
-
-        # Execute web search (async parallel queries)
-        logger.debug(f"Executing web search with {len(queries)} queries...")
-        web_results = await _web_search.search(queries, max_results_per_query=3)
-        logger.info(f"Web search returned {len(web_results)} results")
-        return web_results
-
-    except Exception as e:
-        return []
-
-
 async def _run_all_searches_async(
     vector_query: str,
     bm25_query: str,
-    web_query: str,
     intent: IntentClassification
-) -> Tuple[List, List, List]:
+) -> Tuple[List, List]:
     """
-    Run ALL searches in parallel for maximum performance.
+    Run vector and BM25 searches in parallel for maximum performance.
 
     Args:
         vector_query: Clean natural language query for semantic search
         bm25_query: Keyword-enriched query for BM25 lexical search
-        web_query: Clean query for web search
         intent: Intent classification for metadata filtering
 
     Returns:
-        Tuple of (vector_results, bm25_results, web_results)
+        Tuple of (vector_results, bm25_results)
     """
-    # Execute ALL 3 searches concurrently with optimized queries
+    # Execute both searches concurrently with optimized queries
     results = await asyncio.gather(
         _run_vector_search_async(vector_query, intent),
         _run_bm25_search_async(bm25_query),
-        _run_web_search_async(web_query, intent),
         return_exceptions=True  # Don't fail if one search fails
     )
 
@@ -458,7 +413,7 @@ def hybrid_retrieval_node(state: AgentState) -> dict[str, Any]:
                 "mode": AGENT_MODE,
                 "vector_results": 0,
                 "bm25_results": 0,
-                "web_results": 0,
+                "web_results": 0,  # Always 0 in offline-only mode
                 "top_scores": [d["relevance_score"] for d in cached_docs],
                 "granularity_breakdown": {},
                 "source_breakdown": {},
@@ -477,9 +432,6 @@ def hybrid_retrieval_node(state: AgentState) -> dict[str, Any]:
         bm25_query_parts.extend(intent.topics)
     bm25_query = " ".join(bm25_query_parts)
 
-    # Web search: Use clean natural language
-    web_query = cleaned_request
-
     logger.debug(f"Vector query (semantic): {vector_query[:100]}")
     logger.debug(f"BM25 query (keywords): {bm25_query[:100]}")
 
@@ -493,43 +445,21 @@ def hybrid_retrieval_node(state: AgentState) -> dict[str, Any]:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
 
-    # Execute all searches concurrently with optimized queries
-    vector_results, bm25_results, web_results = loop.run_until_complete(
-        _run_all_searches_async(vector_query, bm25_query, web_query, intent)
+    # Execute searches concurrently with optimized queries
+    vector_results, bm25_results = loop.run_until_complete(
+        _run_all_searches_async(vector_query, bm25_query, intent)
     )
 
     # Deduplicate vector results by text content (CRITICAL FIX for duplicate results)
     vector_results = _deduplicate_by_text(vector_results)
 
-    # Deduplicate web results (domain-based, if online mode)
-    if web_results and AGENT_MODE == "online":
-        from src.rag.deduplicator import deduplicate_web_results
-        # Create offline doc list for deduplication
-        offline_docs = [
-            RetrievedDocument(
-                file_path=r.document_path,
-                title=r.document_title,
-                framework=r.framework,
-                language=r.language,
-                topic=r.topic,
-                granularity=r.granularity,
-                matched_text=r.matched_text,
-                section_title=r.section_title,
-                section_level=r.section_level,
-                content_block=r.content_block,
-                sections=[],
-                relevance_score=min(r.score * 100, 100)
-            )
-            for r in vector_results
-        ]
-        web_results = deduplicate_web_results(web_results, offline_docs)
 
-    # Use HybridScorer to combine and rank all results
+    # Use HybridScorer to combine and rank results
     # RRF is faster (no normalization) and often more accurate than weighted combination
     retrieved_docs = _scorer.score_and_rank_rrf(
         vector_results=vector_results,
         bm25_results=bm25_results,
-        web_results=web_results,
+        web_results=[],  # No web results in offline-only mode
         intent=intent,
         top_k=5
     )
@@ -562,7 +492,7 @@ def hybrid_retrieval_node(state: AgentState) -> dict[str, Any]:
             "mode": AGENT_MODE,
             "vector_results": len(vector_results),
             "bm25_results": len(bm25_results),
-            "web_results": len(web_results) if web_results else 0,
+            "web_results": 0,  # Always 0 in offline-only mode
             "top_scores": [d.relevance_score for d in retrieved_docs],
             "granularity_breakdown": granularity_counts,
             "source_breakdown": source_counts,
