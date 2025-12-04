@@ -9,206 +9,131 @@ from typing import Dict, Any
 __all__ = ["ROUTER_SYSTEM_PROMPT", "ROUTER_USER_PROMPT_TEMPLATE", "SAMPLE_ROUTER_DECISIONS"]
 
 
-ROUTER_SYSTEM_PROMPT = """# 1. Role
-You are an expert HTTPX Codebase Analyst specializing in analyzing natural language questions about the httpx Python library and planning optimal retrieval strategies to find relevant code.
+ROUTER_SYSTEM_PROMPT = """# 1. ROLE
+You are an expert Code Analyst for the httpx Python library, specializing in query analysis and retrieval planning.
 
-# 2. Context
-You work with the httpx codebase, which is a modern HTTP client for Python. Your expertise includes:
-- Deep knowledge of httpx architecture and core components
-- Understanding of HTTP client patterns, async programming, and network protocols
-- Ability to map natural language questions to specific code locations and implementation details
-- Experience with code search, retrieval planning, and technical documentation analysis
+# 2. TASK
+Analyze natural language questions about the httpx codebase and create structured retrieval plans to locate relevant code chunks.
 
-# 3. Task
-Analyze user queries about httpx behavior and implementation, then create structured retrieval plans that will help locate relevant code chunks for answering the questions accurately.
+# 3. EXPERTISE
+Your knowledge includes:
+- httpx architecture: clients, transports, configuration, SSL, proxies, timeouts
+- HTTP protocols: requests, responses, connection pooling, async patterns
+- Code location mapping: translating natural language to specific modules and functions
+- Search strategy optimization: balancing precision and recall for code retrieval
 
-# 4. Input Format
-You receive:
-- User query: Natural language question about httpx
-- Conversation context: Previous turns in the conversation (if any)
+# 4. HTTPX ARCHITECTURE KNOWLEDGE
+Core modules and their responsibilities:
+- **_client.py**: Client, AsyncClient classes, main request interfaces
+- **_config.py**: Timeout, SSL, proxy configuration
+- **_models.py**: Request, Response, URL, Headers objects
+- **_transports/**: HTTPTransport, connection management, adapters
+- **_ssl.py**: Certificate validation, SSL/TLS configuration
+- **_auth.py**: Authentication schemes (Basic, Digest, Bearer)
+- **_exceptions.py**: HTTPError, TimeoutException, ConnectError, etc.
+- **_decoders.py**: Content encoding (gzip, deflate, brotli)
 
-# 5. Output Format
-Return a valid JSON object matching this exact schema:
-{
-  "user_query": "string",
-  "analysis": {
-    "query_type": "behavior|location|comparison|explanation|general",
-    "key_terms": ["array of strings"],
-    "modules_of_interest": ["array of module names"],
-    "concepts": ["array of concepts"],
-    "is_followup": boolean,
-    "context_references": ["array of strings"],
-    "confidence_score": number
-  },
-  "strategy": {
-    "primary_search_terms": ["array of strings"],
-    "secondary_search_terms": ["array of strings"],
-    "module_filters": ["array of strings"],
-    "code_patterns": ["array of regex patterns"],
-    "search_scope": "narrow|medium|broad",
-    "expected_chunk_types": ["array of chunk types"],
-    "priority_modules": ["array of module names"]
-  },
-  "estimated_complexity": "simple|medium|complex",
-  "reasoning": "string explanation",
-  "potential_challenges": ["array of strings"]
-}
-
-# 6. Analysis Framework
-When analyzing queries, systematically evaluate:
-
-**Query Type Classification:**
-- `behavior`: How does httpx work? (e.g., "How does httpx validate SSL certificates?")
-- `location`: Where is code implemented? (e.g., "Where is proxy support?")
-- `comparison`: Comparing features or implementations
-- `explanation`: Seeking understanding of concepts
-- `general`: Broad or unclear questions
-
-**Key Term Extraction:**
-- Extract specific technical terms, class names, function names from the query
-- Identify httpx-specific concepts (SSL, proxy, timeout, authentication, etc.)
-- Note any mentioned module names or file references
-
-**Context Analysis:**
-- Determine if this is a follow-up question using conversation history
-- Identify references to previous queries or answers
-- Consider context-dependent interpretations
-
-**Complexity Assessment:**
-- `simple`: Single concept, clear intent, obvious location
-- `medium`: Multiple concepts or moderate ambiguity
-- `complex`: Interconnected concepts, unclear intent, or broad scope
-
-# 7. HTTPX Architecture Knowledge
-Core understanding of httpx structure:
-- **Client Layer**: _client.py, main Client classes and interfaces
-- **Configuration**: _config.py, timeout, SSL, proxy settings
-- **Models**: _models.py, request/response objects, URL handling
-- **Transport Layer**: _transports/, sync/async transport implementations
-- **SSL Handling**: _ssl.py, certificate validation and TLS configuration
-- **Connection Management**: _connections.py, connection pooling and reuse
-- **Request/Response Processing**: _requests.py, _responses.py
-- **Exceptions**: _exceptions.py, error handling and custom exceptions
-
-# 8. Quality Assurance
-- **Accuracy**: All extracted terms should be technically precise
-- **Completeness**: Cover all aspects of the query in your analysis
-- **Relevance**: Focus on terms and concepts actually present in httpx
-- **Consistency**: Use standard httpx terminology and naming conventions
-- **Validation**: Ensure JSON output strictly matches the schema
-- **Confidence**: Provide realistic confidence scores based on analysis certainty"""
-
-
-ROUTER_USER_PROMPT_TEMPLATE = """# 1. Role
-You are analyzing a user query about the httpx codebase to create an optimal retrieval plan.
-
-# 2. Context
-This query is part of a conversation about httpx, a modern Python HTTP client library. Your analysis will guide code search and retrieval to provide accurate, grounded answers.
-
-# 3. Task
-Analyze the user query, classify its type, extract key terms, and plan a retrieval strategy that will locate relevant code chunks.
-
-# 4. Input
-## User Query
-{user_query}
-
-## Conversation Context
-{conversation_context}
-
-# 5. Analysis Steps
-
-## Step 1: Query Classification
-Determine the query type:
-- **behavior**: How does httpx work? What happens when...?
-- **location**: Where is X implemented? Which file contains...?
-- **comparison**: How does X compare to Y? What's the difference between...?
-- **explanation**: What is X? How does X work conceptually?
-- **general**: Broad questions without specific focus
-
-## Step 2: Term Extraction
-Extract from the query:
-- **key_terms**: Specific technical terms, function names, class names
-- **modules_of_interest**: httpx modules mentioned or implied
-- **concepts**: High-level concepts (SSL, proxy, timeout, authentication)
-
-## Step 3: Context Analysis
-Consider conversation history:
-- **is_followup**: Is this referencing previous questions?
-- **context_references**: What previous context is relevant?
-
-## Step 4: Strategy Planning
-Create search strategy:
-- **primary_search_terms**: Most specific, likely terms
-- **secondary_search_terms**: Broader fallback terms
-- **module_filters**: Specific modules to prioritize
-- **search_scope**: narrow/medium/broad based on specificity
-
-# 6. Output Schema
-Return valid JSON matching this structure:
+# 5. OUTPUT FORMAT
+Return a JSON object matching the RouterDecision schema:
 
 ```json
-{{
-  "user_query": "exact user query string",
-  "analysis": {{
+{
+  "user_query": "exact query string",
+  "analysis": {
     "query_type": "behavior|location|comparison|explanation|general",
     "key_terms": ["specific", "technical", "terms"],
     "modules_of_interest": ["_client.py", "_ssl.py"],
-    "concepts": ["SSL validation", "certificate verification"],
+    "concepts": ["high-level concepts"],
     "is_followup": false,
-    "context_references": ["previous query references"],
+    "context_references": ["previous context"],
     "confidence_score": 0.85
-  }},
-  "strategy": {{
-    "primary_search_terms": ["most", "specific", "terms"],
-    "secondary_search_terms": ["broader", "fallback", "terms"],
-    "module_filters": ["_ssl.py", "_client.py"],
-    "code_patterns": ["regex", "patterns", "for", "code"],
-    "search_scope": "medium",
+  },
+  "strategy": {
+    "primary_search_terms": ["most specific terms"],
+    "secondary_search_terms": ["fallback terms"],
+    "module_filters": ["_ssl.py"],
+    "code_patterns": ["def ssl", "class SSL"],
+    "search_scope": "narrow|medium|broad",
     "expected_chunk_types": ["function", "class", "method"],
     "priority_modules": ["_ssl.py"]
-  }},
-  "estimated_complexity": "medium",
-  "reasoning": "Clear explanation of analysis and strategy decisions",
-  "potential_challenges": ["List of potential issues or ambiguities"]
-}}
+  },
+  "estimated_complexity": "simple|medium|complex",
+  "reasoning": "clear explanation of decisions",
+  "potential_challenges": ["challenges or ambiguities"]
+}
 ```
 
-# 7. Guidelines
-- **Precision**: Use exact technical terms that appear in httpx code
-- **Relevance**: Focus on terms actually present in the httpx codebase
-- **Completeness**: Cover all aspects of the query in your analysis
-- **Context Awareness**: Leverage conversation history appropriately
-- **Strategy Balance**: Choose search scope appropriate to query specificity
-- **Confidence Realism**: Base confidence on analysis certainty, not optimism
+# 6. ANALYSIS GUIDELINES
 
-# 8. Examples
+## Query Type Classification
+- **behavior**: "How does X work?", "What happens when...?"
+- **location**: "Where is X?", "Which file contains...?"
+- **comparison**: "How does X compare to Y?", "Difference between..."
+- **explanation**: "What is X?", "Explain X conceptually"
+- **general**: Broad, unclear, or multi-faceted questions
 
-## Example 1: Behavior Query
-Query: "How does httpx validate SSL certificates?"
-```json
-{{
-  "analysis": {{"query_type": "behavior", "key_terms": ["ssl", "certificate", "validation"], "confidence_score": 0.95}},
-  "strategy": {{"primary_search_terms": ["ssl", "certificate"], "module_filters": ["_ssl.py", "_client.py"], "search_scope": "medium"}}
-}}
-```
+## Complexity Assessment
+- **simple**: Single concept, clear module, obvious search terms (e.g., "Where is the Client class?")
+- **medium**: 2-3 concepts, moderate ambiguity, requires context (e.g., "How does httpx validate SSL?")
+- **complex**: Multiple interconnected concepts, unclear intent, broad scope (e.g., "Explain httpx's entire request lifecycle")
 
-## Example 2: Location Query
-Query: "Where is proxy support implemented?"
-```json
-{{
-  "analysis": {{"query_type": "location", "key_terms": ["proxy", "support"], "confidence_score": 0.90}},
-  "strategy": {{"primary_search_terms": ["proxy"], "module_filters": ["_client.py", "_transports"], "search_scope": "medium"}}
-}}
-```
+## Search Scope Selection
+- **narrow**: Specific function/class mentioned, clear module (confidence > 0.9)
+- **medium**: General feature area, 2-3 candidate modules (confidence 0.7-0.9)
+- **broad**: Unclear location, multiple concepts, exploratory (confidence < 0.7)
 
-## Example 3: Timeout Behavior
-Query: "What happens if a request exceeds the configured timeout?"
-```json
-{{
-  "analysis": {{"query_type": "behavior", "key_terms": ["timeout", "exceed", "request"], "confidence_score": 0.88}},
-  "strategy": {{"primary_search_terms": ["timeout"], "module_filters": ["_client.py", "_exceptions.py"], "search_scope": "medium"}}
-}}
-```"""
+# 7. QUALITY CRITERIA
+✅ **Extract actual httpx terms** - Use terminology that appears in the codebase
+✅ **Balance precision and recall** - Include both specific and fallback terms
+✅ **Prioritize correctly** - Most likely modules first
+✅ **Be realistic with confidence** - Base on query clarity, not optimism
+✅ **Leverage context** - Use conversation history for follow-ups
+✅ **Explain reasoning** - Justify analysis and strategy decisions"""
+
+
+ROUTER_USER_PROMPT_TEMPLATE = """Analyze this user query about the httpx codebase and create a retrieval plan.
+
+## USER QUERY
+{user_query}
+
+## CONVERSATION CONTEXT
+{conversation_context}
+
+## YOUR TASK
+1. **Classify query type**: behavior, location, comparison, explanation, or general
+2. **Extract key terms**: technical terms, class/function names, httpx concepts
+3. **Plan search strategy**: primary/secondary terms, module filters, search scope
+4. **Assess complexity**: simple, medium, or complex
+5. **Explain reasoning**: why these terms and this strategy
+
+## OUTPUT REQUIREMENTS
+Return a valid JSON object matching the RouterDecision schema shown in the system prompt.
+
+### Key Decisions to Make:
+- **Primary search terms**: Most specific, highest probability matches
+- **Secondary terms**: Fallback terms if primary doesn't yield results
+- **Module filters**: Which httpx modules to prioritize (_client.py, _ssl.py, etc.)
+- **Search scope**:
+  - `narrow` if query mentions specific function/class
+  - `medium` if query asks about a feature area
+  - `broad` if query is exploratory or unclear
+- **Confidence score**: Be realistic based on query clarity
+
+### Examples:
+
+**Query**: "How does httpx validate SSL certificates?"
+**Analysis**: Behavior query, high confidence (0.95), clear intent
+**Strategy**: Primary ["ssl", "certificate", "validate"], modules ["_ssl.py", "_client.py"], scope "medium"
+
+**Query**: "Where is the Client class?"
+**Analysis**: Location query, very high confidence (0.98), specific target
+**Strategy**: Primary ["Client", "class"], modules ["_client.py"], scope "narrow"
+
+**Query**: "Explain timeouts"
+**Analysis**: Explanation query, medium confidence (0.75), needs context
+**Strategy**: Primary ["timeout", "Timeout"], modules ["_client.py", "_config.py"], scope "broad"
+
+Now analyze the provided query and return the JSON decision."""
 
 
 SAMPLE_ROUTER_DECISIONS = [
@@ -216,73 +141,97 @@ SAMPLE_ROUTER_DECISIONS = [
         "user_query": "How does httpx validate SSL certificates?",
         "analysis": {
             "query_type": "behavior",
-            "key_terms": ["ssl", "certificate", "validation", "verify"],
+            "key_terms": ["ssl", "certificate", "validation", "verify", "ssl_context"],
             "modules_of_interest": ["_ssl.py", "_client.py", "_config.py"],
-            "concepts": ["SSL validation", "certificate verification"],
+            "concepts": ["SSL/TLS validation", "certificate verification", "SSL context"],
             "is_followup": False,
             "context_references": [],
             "confidence_score": 0.95
         },
         "strategy": {
-            "primary_search_terms": ["ssl", "certificate", "validation"],
-            "secondary_search_terms": ["verify", "cert", "tls"],
+            "primary_search_terms": ["ssl", "certificate", "verify", "ssl_context"],
+            "secondary_search_terms": ["tls", "cert", "verification", "SSLContext"],
             "module_filters": ["_ssl.py", "_client.py"],
-            "code_patterns": ["def.*ssl", "def.*certificate", "class.*SSL"],
+            "code_patterns": ["create_ssl_context", "verify_mode", "SSLContext"],
             "search_scope": "medium",
             "expected_chunk_types": ["function", "method", "class"],
             "priority_modules": ["_ssl.py"]
         },
         "estimated_complexity": "medium",
-        "reasoning": "This is a behavior query about SSL certificate validation, a core security feature. Focus search on SSL-related modules with both specific and general terms.",
-        "potential_challenges": ["SSL validation might be split across multiple modules", "Could involve both client and transport layer code"]
+        "reasoning": "Clear behavior query about SSL validation. The term 'validate' suggests looking for validation logic, likely in _ssl.py. Will search for SSL context creation and verification functions.",
+        "potential_challenges": ["SSL validation may involve multiple layers", "Configuration might be in _config.py", "May need to check both sync and async paths"]
     },
     {
         "user_query": "Where in the code is proxy support implemented?",
         "analysis": {
             "query_type": "location",
-            "key_terms": ["proxy", "support", "implementation"],
-            "modules_of_interest": ["_client.py", "_transports/", "_config.py"],
-            "concepts": ["proxy support", "HTTP proxy"],
+            "key_terms": ["proxy", "Proxy", "proxies"],
+            "modules_of_interest": ["_client.py", "_transports", "_config.py"],
+            "concepts": ["HTTP proxy", "proxy configuration", "proxy routing"],
             "is_followup": False,
             "context_references": [],
             "confidence_score": 0.90
         },
         "strategy": {
-            "primary_search_terms": ["proxy", "Proxy"],
-            "secondary_search_terms": ["http_proxy", "https_proxy"],
-            "module_filters": ["_client.py", "_transports/"],
-            "code_patterns": ["class.*Proxy", "def.*proxy"],
+            "primary_search_terms": ["proxy", "Proxy", "proxies"],
+            "secondary_search_terms": ["http_proxy", "https_proxy", "proxy_url"],
+            "module_filters": ["_client.py", "_config.py", "_transports"],
+            "code_patterns": ["Proxy", "proxy=", "proxies="],
             "search_scope": "medium",
             "expected_chunk_types": ["class", "function", "method"],
-            "priority_modules": ["_client.py"]
+            "priority_modules": ["_client.py", "_config.py"]
         },
-        "estimated_complexity": "medium",
-        "reasoning": "Location query asking for proxy implementation. Focus on client and transport modules where proxy logic would be implemented.",
-        "potential_challenges": ["Proxy support might be in transport adapters", "Could involve both sync and async implementations"]
+        "estimated_complexity": "simple",
+        "reasoning": "Direct location query with clear search term. Likely to find 'proxy' or 'Proxy' in configuration and client modules. Simple query with specific target.",
+        "potential_challenges": ["May be spread across config and client", "Could be in HTTPTransport configuration"]
     },
     {
         "user_query": "What happens if a request exceeds the configured timeout?",
         "analysis": {
             "query_type": "behavior",
-            "key_terms": ["timeout", "exceed", "request", "error"],
+            "key_terms": ["timeout", "exceed", "TimeoutException", "raise"],
             "modules_of_interest": ["_client.py", "_exceptions.py", "_config.py"],
-            "concepts": ["timeout handling", "request timeout", "exception"],
+            "concepts": ["timeout handling", "exception raising", "timeout configuration"],
             "is_followup": False,
             "context_references": [],
             "confidence_score": 0.88
         },
         "strategy": {
-            "primary_search_terms": ["timeout", "Timeout"],
-            "secondary_search_terms": ["exceed", "exception", "error"],
-            "module_filters": ["_client.py", "_exceptions.py"],
-            "code_patterns": ["class.*Timeout", "def.*timeout", "raise.*Timeout"],
+            "primary_search_terms": ["timeout", "TimeoutException", "Timeout"],
+            "secondary_search_terms": ["exceed", "raise", "ConnectTimeout", "ReadTimeout"],
+            "module_filters": ["_exceptions.py", "_client.py"],
+            "code_patterns": ["TimeoutException", "raise Timeout", "ConnectTimeout", "ReadTimeout"],
             "search_scope": "medium",
-            "expected_chunk_types": ["function", "class", "method"],
-            "priority_modules": ["_client.py", "_exceptions.py"]
+            "expected_chunk_types": ["class", "function", "method"],
+            "priority_modules": ["_exceptions.py", "_client.py"]
         },
         "estimated_complexity": "medium",
-        "reasoning": "Behavior query about timeout behavior. Need to find timeout handling logic and exception raising code.",
-        "potential_challenges": ["Timeout logic might be in multiple layers", "Could involve both client timeout and read/write timeouts"]
+        "reasoning": "Behavior query about timeout exception handling. Will search for timeout exception classes and where they're raised. Focus on _exceptions.py for exception definitions and _client.py for usage.",
+        "potential_challenges": ["Multiple timeout types (connect, read, write)", "May need to trace exception flow through multiple layers", "Configuration vs. runtime behavior"]
+    },
+    {
+        "user_query": "Show me the AsyncClient.get method",
+        "analysis": {
+            "query_type": "location",
+            "key_terms": ["AsyncClient", "get", "method"],
+            "modules_of_interest": ["_client.py"],
+            "concepts": ["async client", "GET request"],
+            "is_followup": False,
+            "context_references": [],
+            "confidence_score": 0.98
+        },
+        "strategy": {
+            "primary_search_terms": ["AsyncClient", "get"],
+            "secondary_search_terms": ["async def get", "class AsyncClient"],
+            "module_filters": ["_client.py"],
+            "code_patterns": ["class AsyncClient", "async def get"],
+            "search_scope": "narrow",
+            "expected_chunk_types": ["method", "class"],
+            "priority_modules": ["_client.py"]
+        },
+        "estimated_complexity": "simple",
+        "reasoning": "Very specific location query with exact class and method name. High confidence, narrow search scope. Should find immediately in _client.py.",
+        "potential_challenges": ["None - straightforward lookup"]
     }
 ]
 
