@@ -80,27 +80,6 @@ class BaseChunk(BaseModel):
             raise ValueError(f"end_line ({v}) must be >= start_line ({start_line})")
         return v
 
-    class Config:
-        """Pydantic configuration."""
-        json_schema_extra = {
-            "example": {
-                "id": "abc123def456",
-                "source_type": "code",
-                "chunk_type": "function",
-                "content": "def get(self, url):\n    return self._request('GET', url)",
-                "token_count": 15,
-                "file_path": "httpx/client.py",
-                "filename": "client.py",
-                "start_line": 100,
-                "end_line": 102,
-                "name": "get",
-                "full_name": "Client.get",
-                "parent_context": "Client",
-                "docstring": "Send a GET request",
-                "imports": ["import httpcore", "from typing import Optional"]
-            }
-        }
-
 
 class CodeChunk(BaseChunk):
     """Code-specific chunk model for Python functions and classes.
