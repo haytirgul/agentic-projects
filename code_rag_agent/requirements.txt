@@ -26,6 +26,9 @@ rich>=13.0.0
 # Observability and debugging (optional)
 langsmith>=0.1.0
 
+# Development and linting
+ruff>=0.14.0
+
 # Testing
 pytest>=7.4.0
 pytest-cov>=4.1.0

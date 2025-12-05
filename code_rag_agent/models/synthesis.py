@@ -39,7 +39,7 @@ class SynthesisRequest(BaseModel):
     synthesis_style: str = Field(
         "concise",
         description="Answer style: concise, detailed, explanatory",
-        regex="^(concise|detailed|explanatory)$"
+        pattern="^(concise|detailed|explanatory)$"
     )
 
     @property
@@ -175,7 +175,7 @@ class SynthesisMetadata(BaseModel):
     hallucination_risk: str = Field(
         "low",
         description="Risk assessment: low, medium, high",
-        regex="^(low|medium|high)$"
+        pattern="^(low|medium|high)$"
     )
     citation_completeness: float = Field(
         ...,

@@ -56,7 +56,7 @@ def clone_or_update_repo() -> bool:
                 text=True,
                 check=True
             )
-            logger.info(f"Cloned repository successfully")
+            logger.info("Cloned repository successfully")
 
         # Get repository info
         result = subprocess.run(

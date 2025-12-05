@@ -2,11 +2,21 @@
 
 This module contains prompts for the Router node that analyzes user queries
 about the httpx codebase and plans retrieval strategies.
+
+Following the RAG_agent pattern, this module includes both prompt templates
+and message builder functions for easy LLM integration.
 """
 
-from typing import Dict, Any
+from typing import Dict, Any, List, Optional
+from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 
-__all__ = ["ROUTER_SYSTEM_PROMPT", "ROUTER_USER_PROMPT_TEMPLATE", "SAMPLE_ROUTER_DECISIONS"]
+__all__ = [
+    "ROUTER_SYSTEM_PROMPT",
+    "ROUTER_USER_PROMPT_TEMPLATE",
+    "SAMPLE_ROUTER_DECISIONS",
+    "get_router_prompts",
+    "build_router_messages",
+]
 
 
 ROUTER_SYSTEM_PROMPT = """# 1. ROLE
@@ -88,7 +98,52 @@ Return a JSON object matching the RouterDecision schema:
 ✅ **Prioritize correctly** - Most likely modules first
 ✅ **Be realistic with confidence** - Base on query clarity, not optimism
 ✅ **Leverage context** - Use conversation history for follow-ups
-✅ **Explain reasoning** - Justify analysis and strategy decisions"""
+✅ **Explain reasoning** - Justify analysis and strategy decisions
+
+# 8. PITFALLS (COMMON MISTAKES TO AVOID)
+
+**PITFALL 1: Over-specific module filtering**
+❌ WRONG: Filter to single module when query is exploratory ("How does httpx handle requests?" → only _client.py)
+✅ CORRECT: Use broad scope for exploratory queries, include related modules (_client.py, _models.py, _transports/)
+
+**PITFALL 2: Missing fallback terms**
+❌ WRONG: Only include exact terms ("TimeoutException") without variations
+✅ CORRECT: Include variations ("timeout", "Timeout", "TimeoutException", "ConnectTimeout", "ReadTimeout")
+
+**PITFALL 3: Ignoring conversation context**
+❌ WRONG: Treat "What about async?" as completely new query after discussing Client
+✅ CORRECT: Set is_followup=true, reference previous context about Client, search for AsyncClient
+
+**PITFALL 4: Over-confident scoring**
+❌ WRONG: confidence_score=0.95 for vague query "explain timeouts"
+✅ CORRECT: confidence_score=0.70 (query is vague, could mean connect/read/write timeouts, configuration vs behavior)
+
+**PITFALL 5: Wrong query type classification**
+❌ WRONG: "Where is proxy support?" as "behavior" query
+✅ CORRECT: "Where is..." pattern indicates "location" query
+
+**PITFALL 6: Ignoring module relationships**
+❌ WRONG: Search only _config.py for "timeout configuration"
+✅ CORRECT: Include both _config.py (definition) and _client.py (usage)
+
+**PITFALL 7: Generic search terms**
+❌ WRONG: primary_search_terms: ["http", "request", "client"] (too generic)
+✅ CORRECT: primary_search_terms: ["AsyncClient", "async def request", "httpcore"] (specific to httpx)
+
+# 9. VALIDATION CHECKLIST
+
+Before returning your response, validate:
+
+✓ **Query Type**: Is the classification accurate (behavior vs location vs explanation)?
+✓ **Key Terms**: Do extracted terms actually appear in httpx codebase terminology?
+✓ **Module Mapping**: Are suggested modules realistic for the query?
+✓ **Search Scope**: Does scope match query specificity (specific → narrow, vague → broad)?
+✓ **Confidence Calibration**: Is confidence realistic given query clarity?
+✓ **Fallback Terms**: Are secondary terms actually different from primary (not just duplicates)?
+✓ **JSON Validity**: Is output valid JSON matching RouterDecision schema exactly?
+✓ **Reasoning Clarity**: Does reasoning explain WHY these strategy decisions were made?
+✓ **No Hallucinations**: Are all suggested modules real httpx files (_ssl.py, _client.py, etc.)?
+✓ **Completeness**: All required fields present (user_query, analysis, strategy, reasoning)?"""
 
 
 ROUTER_USER_PROMPT_TEMPLATE = """Analyze this user query about the httpx codebase and create a retrieval plan.
@@ -247,3 +302,41 @@ def get_router_prompts() -> Dict[str, Any]:
         "user_template": ROUTER_USER_PROMPT_TEMPLATE,
         "examples": SAMPLE_ROUTER_DECISIONS
     }
+
+
+def build_router_messages(
+    user_query: str,
+    conversation_history: Optional[str] = None,
+) -> List[BaseMessage]:
+    """Build messages for router query analysis.
+
+    Following the RAG_agent pattern, this function constructs the message list
+    for LLM processing with proper system and human messages.
+
+    Args:
+        user_query: The user's question about httpx codebase
+        conversation_history: Optional formatted conversation history for context
+
+    Returns:
+        List of messages ready for LLM processing (SystemMessage + HumanMessage)
+
+    Example:
+        >>> messages = build_router_messages(
+        ...     user_query="How does httpx validate SSL certificates?",
+        ...     conversation_history=None
+        ... )
+        >>> len(messages)
+        2
+        >>> isinstance(messages[0], SystemMessage)
+        True
+    """
+    # Format user prompt with query and conversation context
+    user_content = ROUTER_USER_PROMPT_TEMPLATE.format(
+        user_query=user_query,
+        conversation_context=conversation_history or "No previous conversation."
+    )
+
+    return [
+        SystemMessage(content=ROUTER_SYSTEM_PROMPT),
+        HumanMessage(content=user_content),
+    ]

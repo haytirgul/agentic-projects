@@ -6,9 +6,35 @@ that can be imported throughout the project.
 
 import os
 from pathlib import Path
-from typing import List, Optional
+from typing import Optional
 
 from dotenv import load_dotenv
+
+# Import hardcoded constants
+try:
+    from .const import (
+        REPO_EXCLUDE_PATTERNS,
+        VECTOR_DB_COLLECTION_NAME,
+        DEFAULT_MAX_CHUNK_SIZE,
+        DEFAULT_CHUNK_OVERLAP,
+        DEFAULT_MAX_CHUNK_TOKENS,
+        TEXT_EXTENSIONS,
+        CODE_EXTENSIONS,
+        MAX_CHUNK_SIZE_MARKDOWN,
+        CHUNK_OVERLAP_MARKDOWN,
+    )
+except ImportError:
+    from const import (
+        REPO_EXCLUDE_PATTERNS,
+        VECTOR_DB_COLLECTION_NAME,
+        DEFAULT_MAX_CHUNK_SIZE,
+        DEFAULT_CHUNK_OVERLAP,
+        DEFAULT_MAX_CHUNK_TOKENS,
+        TEXT_EXTENSIONS,
+        CODE_EXTENSIONS,
+        MAX_CHUNK_SIZE_MARKDOWN,
+        CHUNK_OVERLAP_MARKDOWN,
+    )
 
 # Load environment variables from .env file
 load_dotenv()
@@ -29,6 +55,11 @@ __all__ = [
     "CHUNK_STRATEGY",
     "MAX_CHUNK_SIZE",
     "CHUNK_OVERLAP",
+    "DEFAULT_MAX_CHUNK_SIZE",
+    "DEFAULT_CHUNK_OVERLAP",
+    "DEFAULT_MAX_CHUNK_TOKENS",
+    "MAX_CHUNK_SIZE_MARKDOWN",
+    "CHUNK_OVERLAP_MARKDOWN",
 
     # Embedding settings
     "EMBEDDING_MODEL",
@@ -77,6 +108,10 @@ __all__ = [
     "VERBOSE_OUTPUT",
     "ENABLE_STREAMING",
     "LAZY_INITIALIZATION",
+
+    # File extensions
+    "TEXT_EXTENSIONS",
+    "CODE_EXTENSIONS",
 ]
 
 # ============================================================================
@@ -97,16 +132,7 @@ RAG_COMPONENTS_DIR = DATA_DIR / "rag_components"
 # REPOSITORY SETTINGS
 # ============================================================================
 
-# Patterns to exclude from indexing
-REPO_EXCLUDE_PATTERNS: List[str] = [
-    "tests/*",
-    "docs/*",
-    "*.md",
-    "__pycache__/*",
-    ".git/*",
-    "examples/*",
-    "scripts/*",
-]
+# Repository exclude patterns imported from const.py
 
 # ============================================================================
 # CHUNKING SETTINGS
@@ -161,7 +187,7 @@ RERANKING_ENABLED = os.getenv("RERANKING_ENABLED", "true").lower() == "true"
 
 # Vector database settings (FAISS)
 VECTOR_DB_PERSIST_DIRECTORY = str(VECTOR_DB_DIR)
-VECTOR_DB_COLLECTION_NAME = "code_chunks"
+# VECTOR_DB_COLLECTION_NAME imported from const.py
 
 # ============================================================================
 # CONVERSATION MEMORY SETTINGS
@@ -229,6 +255,26 @@ ENABLE_STREAMING = os.getenv("ENABLE_STREAMING", "true").lower() == "true"
 
 # Optimization
 LAZY_INITIALIZATION = os.getenv("LAZY_INITIALIZATION", "true").lower() == "true"
+
+# ============================================================================
+# PROCESSING SETTINGS
+# ============================================================================
+
+# Processing constants imported from const.py
+
+# ============================================================================
+# OUTPUT FILE PATHS
+# ============================================================================
+
+# Processed data output files
+CODE_CHUNKS_FILE = DATA_DIR / "processed" / "code_chunks.json"
+MARKDOWN_CHUNKS_FILE = DATA_DIR / "processed" / "markdown_chunks.json"
+TEXT_CHUNKS_FILE = DATA_DIR / "processed" / "text_chunks.json"
+ALL_CHUNKS_FILE = DATA_DIR / "processed" / "all_chunks.json"
+
+# Processing configuration
+MAX_CHUNK_SIZE_TEXT = DEFAULT_MAX_CHUNK_SIZE
+# MAX_CHUNK_SIZE_MARKDOWN and CHUNK_OVERLAP_MARKDOWN imported from const.py
 
 # ============================================================================
 # VALIDATION
