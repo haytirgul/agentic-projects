@@ -41,6 +41,7 @@ from utils import (
 
 project_root = setup_project_paths()
 
+from models.chunk import MarkdownChunk
 
 logger = logging.getLogger(__name__)
 
@@ -340,30 +341,40 @@ def process_markdown_file(file_path: Path) -> list[dict[str, Any]]:
         # Use the splitter to get chunks (PRD-compliant format)
         chunks = splitter.split_text(content, metadata)
 
-        # Convert to unified schema format
+        # Convert to unified schema format with Pydantic validation
         formatted_chunks = []
         for chunk in chunks:
             # Extract header metadata
             header_meta = {k: v for k, v in chunk['metadata'].items() if k.startswith('h')}
 
-            formatted_chunk = {
-                "id": chunk['id'],
-                "source_type": "markdown",
-                "chunk_type": "markdown_section",
-                "content": chunk['content'],
-                "token_count": chunk['token_count'],
-                "file_path": relative_path,
-                "filename": file_path.name,
-                "start_line": chunk.get('start_line', 1),
-                "end_line": chunk.get('end_line', 1),
-                "name": chunk['metadata'].get('h1', 'Document'),
-                "full_name": chunk['metadata'].get('h1', 'Document'),
-                "parent_context": "",
-                "headers": header_meta,
-                "heading_level": max(1, len(header_meta)),
-                "is_code": chunk['is_code']
-            }
-            formatted_chunks.append(formatted_chunk)
+            try:
+                # Create and validate chunk with Pydantic
+                markdown_chunk = MarkdownChunk(
+                    id=chunk['id'],
+                    source_type="markdown",
+                    chunk_type="markdown_section",
+                    content=chunk['content'],
+                    token_count=chunk['token_count'],
+                    file_path=relative_path,
+                    filename=file_path.name,
+                    start_line=chunk.get('start_line', 1),
+                    end_line=chunk.get('end_line', 1),
+                    name=chunk['metadata'].get('h1', 'Document'),
+                    full_name=chunk['metadata'].get('h1', 'Document'),
+                    parent_context="",
+                    headers=header_meta,
+                    heading_level=max(1, len(header_meta)),
+                    is_code=chunk['is_code']
+                )
+                # Convert to dict for JSON serialization
+                formatted_chunks.append(markdown_chunk.model_dump(exclude_none=True))
+            except Exception as e:
+                logger.error(
+                    f"Pydantic validation failed for markdown chunk "
+                    f"in {file_path}:{chunk.get('start_line', 'unknown')}. "
+                    f"Error: {e}. Skipping chunk - requires human examination."
+                )
+                # Skip invalid chunk
 
         return formatted_chunks
 

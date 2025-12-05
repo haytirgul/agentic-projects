@@ -34,6 +34,8 @@ from utils import (
 project_root = setup_project_paths()
 logger = logging.getLogger(__name__)
 
+from models.chunk import TextChunk
+
 
 def chunk_text_content(content: str, file_path: Path) -> list[dict[str, Any]]:
     """Chunk text content based on size or structure with unified schema."""
@@ -50,22 +52,30 @@ def chunk_text_content(content: str, file_path: Path) -> list[dict[str, Any]]:
         chunk_id = create_chunk_id(file_path, 1, content)
         token_count = estimate_token_count(content)
 
-        chunk = {
-            "id": chunk_id,
-            "source_type": "text",
-            "chunk_type": "text_file",
-            "content": content,
-            "token_count": token_count,
-            "file_path": relative_path,
-            "filename": file_path.name,
-            "start_line": 1,
-            "end_line": len(content.split('\n')),
-            "name": file_path.name,
-            "full_name": file_path.name,
-            "parent_context": "",
-            "file_extension": file_path.suffix
-        }
-        chunks.append(chunk)
+        try:
+            # Create and validate chunk with Pydantic
+            text_chunk = TextChunk(
+                id=chunk_id,
+                source_type="text",
+                chunk_type="text_file",
+                content=content,
+                token_count=token_count,
+                file_path=relative_path,
+                filename=file_path.name,
+                start_line=1,
+                end_line=len(content.split('\n')),
+                name=file_path.name,
+                full_name=file_path.name,
+                parent_context="",
+                file_extension=file_path.suffix
+            )
+            chunks.append(text_chunk.model_dump(exclude_none=True))
+        except Exception as e:
+            logger.error(
+                f"Pydantic validation failed for text file {file_path}. "
+                f"Error: {e}. Skipping chunk - requires human examination."
+            )
+            # Skip invalid chunk
     else:
         # For large files, split into chunks
         lines = content.split('\n')
@@ -81,22 +91,31 @@ def chunk_text_content(content: str, file_path: Path) -> list[dict[str, Any]]:
                 chunk_id = create_chunk_id(file_path, current_chunk_start, chunk_content)
                 token_count = estimate_token_count(chunk_content)
 
-                chunk = {
-                    "id": chunk_id,
-                    "source_type": "text",
-                    "chunk_type": "text_file_chunk",
-                    "content": chunk_content,
-                    "token_count": token_count,
-                    "file_path": relative_path,
-                    "filename": file_path.name,
-                    "start_line": current_chunk_start,
-                    "end_line": i,
-                    "name": f"{file_path.name} (part {len(chunks) + 1})",
-                    "full_name": f"{file_path.name} (part {len(chunks) + 1})",
-                    "parent_context": file_path.name,
-                    "file_extension": file_path.suffix
-                }
-                chunks.append(chunk)
+                try:
+                    # Create and validate chunk with Pydantic
+                    text_chunk = TextChunk(
+                        id=chunk_id,
+                        source_type="text",
+                        chunk_type="text_file_chunk",
+                        content=chunk_content,
+                        token_count=token_count,
+                        file_path=relative_path,
+                        filename=file_path.name,
+                        start_line=current_chunk_start,
+                        end_line=i,
+                        name=f"{file_path.name} (part {len(chunks) + 1})",
+                        full_name=f"{file_path.name} (part {len(chunks) + 1})",
+                        parent_context=file_path.name,
+                        file_extension=file_path.suffix
+                    )
+                    chunks.append(text_chunk.model_dump(exclude_none=True))
+                except Exception as e:
+                    logger.error(
+                        f"Pydantic validation failed for text file chunk "
+                        f"in {file_path}:{current_chunk_start}-{i}. "
+                        f"Error: {e}. Skipping chunk - requires human examination."
+                    )
+                    # Skip invalid chunk
 
                 # Reset for next chunk
                 current_chunk_lines = []

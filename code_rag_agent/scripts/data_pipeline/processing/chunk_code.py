@@ -189,22 +189,33 @@ def chunk_function(
     # Calculate token count
     token_count = estimate_token_count(code_content)
 
-    return {
-        "id": chunk_id,
-        "source_type": "code",
-        "chunk_type": "function",
-        "content": code_content,
-        "token_count": token_count,
-        "file_path": relative_path,
-        "filename": file_path.name,
-        "start_line": start_line,
-        "end_line": end_line,
-        "name": func_node.name,
-        "full_name": context,
-        "parent_context": class_name or "",
-        "docstring": extract_docstring(func_node),
-        "imports": imports[:5],  # Limit to first 5 imports
-    }
+    try:
+        # Create and validate chunk with Pydantic
+        chunk = CodeChunk(
+            id=chunk_id,
+            source_type="code",
+            chunk_type="function",
+            content=code_content,
+            token_count=token_count,
+            file_path=relative_path,
+            filename=file_path.name,
+            start_line=start_line,
+            end_line=end_line,
+            name=func_node.name,
+            full_name=context,
+            parent_context=class_name or "",
+            docstring=extract_docstring(func_node),
+            imports=imports,
+        )
+        # Return as dict for JSON serialization
+        return chunk.model_dump(exclude_none=True)
+    except Exception as e:
+        logger.error(
+            f"Pydantic validation failed for function '{func_node.name}' "
+            f"in {file_path}:{start_line}. Error: {e}. "
+            f"Skipping chunk - requires human examination."
+        )
+        return None  # Skip invalid chunk
 
 
 def chunk_class(
@@ -280,33 +291,47 @@ def chunk_class(
     # Calculate token count
     token_count = estimate_token_count(class_content)
 
-    class_chunk = {
-        "id": chunk_id,
-        "source_type": "code",
-        "chunk_type": "class",
-        "content": class_content,
-        "token_count": token_count,
-        "file_path": relative_path,
-        "filename": file_path.name,
-        "start_line": start_line,
-        "end_line": end_line,
-        "name": class_node.name,
-        "full_name": class_node.name,
-        "parent_context": "",
-        "docstring": docstring,
-        "imports": imports[:5],
-    }
+    try:
+        # Create and validate chunk with Pydantic
+        class_chunk_model = CodeChunk(
+            id=chunk_id,
+            source_type="code",
+            chunk_type="class",
+            content=class_content,
+            token_count=token_count,
+            file_path=relative_path,
+            filename=file_path.name,
+            start_line=start_line,
+            end_line=end_line,
+            name=class_node.name,
+            full_name=class_node.name,
+            parent_context="",
+            docstring=docstring,
+            imports=imports[:5],
+        )
+        # Convert to dict for processing
+        class_chunk = class_chunk_model.model_dump(exclude_none=True)
 
-    # Check if class chunk needs splitting
-    if len(class_content) > MAX_TOKENS * 4:  # Rough token approximation
-        chunks.extend(split_large_chunk(class_chunk))
-    else:
-        chunks.append(class_chunk)
+        # Check if class chunk needs splitting
+        if len(class_content) > MAX_TOKENS * 4:  # Rough token approximation
+            chunks.extend(split_large_chunk(class_chunk))
+        else:
+            chunks.append(class_chunk)
+    except Exception as e:
+        logger.error(
+            f"Pydantic validation failed for class '{class_node.name}' "
+            f"in {file_path}:{start_line}. Error: {e}. "
+            f"Skipping chunk - requires human examination."
+        )
+        # Skip invalid chunk, don't add to chunks list
 
     # Method chunks (full content)
     for node in ast.walk(class_node):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.lineno > class_node.lineno:
             method_chunk = chunk_function(node, file_path, source_lines, class_node.name, tree)
+            # Skip if validation failed (returns None)
+            if method_chunk is None:
+                continue
             # Check if method chunk needs splitting
             if len(method_chunk["content"]) > MAX_TOKENS * 4:  # Rough token approximation
                 chunks.extend(split_large_chunk(method_chunk))

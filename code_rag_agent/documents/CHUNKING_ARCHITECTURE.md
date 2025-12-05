@@ -150,7 +150,7 @@ headers: {"h1": "Getting Started"}
 content: "Install the package."
 headers: {"h1": "Getting Started", "h2": "Installation"}
 
--- Chunk 3
+- Chunk 3
 content: "Use Homebrew:\n```bash\nbrew install httpx\n```"
 headers: {"h1": "Getting Started", "h2": "Installation", "h3": "MacOS Installation"}
 ```

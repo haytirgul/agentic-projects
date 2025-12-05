@@ -4,7 +4,7 @@ This module defines the unified chunk schema for all document types (code, markd
 All chunks share a common base structure with type-specific optional fields.
 """
 
-from typing import Dict, List, Literal, Optional
+from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -43,12 +43,12 @@ class BaseChunk(BaseModel):
     parent_context: str = Field(default="", description="Parent context (class name, file name, etc.)")
 
     # Type-specific fields (optional, populated based on source_type)
-    docstring: Optional[str] = Field(default=None, description="Docstring (code only)")
-    imports: List[str] = Field(default_factory=list, description="Import statements (code only)")
-    headers: Dict[str, str] = Field(default_factory=dict, description="Header hierarchy (markdown only)")
-    heading_level: Optional[int] = Field(default=None, ge=1, le=6, description="Heading level (markdown only)")
-    is_code: Optional[bool] = Field(default=None, description="Whether content is code (markdown only)")
-    file_extension: Optional[str] = Field(default=None, description="File extension (text only)")
+    docstring: str | None = Field(default=None, description="Docstring (code only)")
+    imports: list[str] = Field(default_factory=list, description="Import statements (code only)")
+    headers: dict[str, str] = Field(default_factory=dict, description="Header hierarchy (markdown only)")
+    heading_level: int | None = Field(default=None, ge=1, le=6, description="Heading level (markdown only)")
+    is_code: bool | None = Field(default=None, description="Whether content is code (markdown only)")
+    file_extension: str | None = Field(default=None, description="File extension (text only)")
 
     @field_validator('chunk_type')
     @classmethod
@@ -111,14 +111,14 @@ class CodeChunk(BaseChunk):
     chunk_type: Literal["function", "class"]
 
     # Required for code chunks
-    docstring: Optional[str] = None
-    imports: List[str] = Field(default_factory=list)
+    docstring: str | None = None
+    imports: list[str] = Field(default_factory=list)
 
     # Not applicable for code
-    headers: Dict[str, str] = Field(default_factory=dict, exclude=True)
-    heading_level: Optional[int] = Field(default=None, exclude=True)
-    is_code: Optional[bool] = Field(default=None, exclude=True)
-    file_extension: Optional[str] = Field(default=None, exclude=True)
+    headers: dict[str, str] = Field(default_factory=dict, exclude=True)
+    heading_level: int | None = Field(default=None, exclude=True)
+    is_code: bool | None = Field(default=None, exclude=True)
+    file_extension: str | None = Field(default=None, exclude=True)
 
 
 class MarkdownChunk(BaseChunk):
@@ -130,14 +130,14 @@ class MarkdownChunk(BaseChunk):
     chunk_type: Literal["markdown_section", "markdown_section_chunk"]
 
     # Required for markdown chunks
-    headers: Dict[str, str] = Field(default_factory=dict)
-    heading_level: Optional[int] = Field(default=1, ge=1, le=6)
+    headers: dict[str, str] = Field(default_factory=dict)
+    heading_level: int | None = Field(default=1, ge=1, le=6)
     is_code: bool = False
 
     # Not applicable for markdown
-    docstring: Optional[str] = Field(default=None, exclude=True)
-    imports: List[str] = Field(default_factory=list, exclude=True)
-    file_extension: Optional[str] = Field(default=None, exclude=True)
+    docstring: str | None = Field(default=None, exclude=True)
+    imports: list[str] = Field(default_factory=list, exclude=True)
+    file_extension: str | None = Field(default=None, exclude=True)
 
 
 class TextChunk(BaseChunk):
@@ -152,11 +152,11 @@ class TextChunk(BaseChunk):
     file_extension: str
 
     # Not applicable for text
-    docstring: Optional[str] = Field(default=None, exclude=True)
-    imports: List[str] = Field(default_factory=list, exclude=True)
-    headers: Dict[str, str] = Field(default_factory=dict, exclude=True)
-    heading_level: Optional[int] = Field(default=None, exclude=True)
-    is_code: Optional[bool] = Field(default=None, exclude=True)
+    docstring: str | None = Field(default=None, exclude=True)
+    imports: list[str] = Field(default_factory=list, exclude=True)
+    headers: dict[str, str] = Field(default_factory=dict, exclude=True)
+    heading_level: int | None = Field(default=None, exclude=True)
+    is_code: bool | None = Field(default=None, exclude=True)
 
 
 # Type alias for any chunk type
