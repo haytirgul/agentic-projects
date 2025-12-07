@@ -555,5 +555,5 @@ pytest tests/test_processing_pipeline.py -v
 
 - **Chunking Architecture**: This document
 - **Retrieval Architecture**: [RETRIEVAL_ARCHITECTURE.md](RETRIEVAL_ARCHITECTURE.md)
-- **Building Blocks**: [BUILDING_BLOCKS_ARCHITECTURE.md](BUILDING_BLOCKS_ARCHITECTURE.md)
+- **Agent Architecture**: [AGENT_ARCHITECTURE.md](AGENT_ARCHITECTURE.md)
 - **LangChain Text Splitters**: https://python.langchain.com/docs/modules/data_connection/document_transformers/

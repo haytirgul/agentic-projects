@@ -1,8 +1,8 @@
 # Code RAG Agent - Agent Architecture
 
-**Version:** 2.0
+**Version:** 2.1
 **Author:** Code RAG Agent Team
-**Last Updated:** 2025-12-06
+**Last Updated:** 2025-12-07
 
 ---
 
@@ -22,7 +22,7 @@ The agent layer is the **orchestration backbone** of the system. Architectural d
 
 ---
 
-## Architecture Overview (v1.3)
+## Architecture Overview (v1.4)
 
 ```
                               +------------------+
@@ -40,32 +40,33 @@ The agent layer is the **orchestration backbone** of the system. Architectural d
 |           |                        |                                      |
 |           v (blocked)              |                                      |
 |          END                       |                                      |
-|                    +---------------+---------------+                      |
-|                    |               |               |                      |
-|                    v               v               v                      |
-|             history_req      follow_up      needs_retrieval               |
-|                    |        (no retrieval)        |                       |
-|                    |               |              v                       |
-|                    |               |    +--------------------+            |
-|                    |               |    |       Router       |            |
-|                    |               |    |  (Fast + LLM)      |            |
-|                    |               |    +---------+----------+            |
-|                    |               |              |                       |
-|                    |               |              v                       |
-|                    |               |    +--------------------+            |
-|                    |               |    |     Retrieval      |            |
-|                    |               |    |  (BM25 + FAISS)    |            |
-|                    |               |    +---------+----------+            |
-|                    |               |              |                       |
-|                    |               +------+-------+                       |
-|                    |                      |                               |
-|                    |                      v                               |
-|                    |            +--------------------+                    |
-|                    |            |     Synthesis      |                    |
-|                    |            |   (w/ Streaming)   |                    |
-|                    |            +---------+----------+                    |
-|                    |                      |                               |
-|                    +----------+-----------+                               |
+|                    +---------------+---------------+---------------+      |
+|                    |               |               |               |      |
+|                    v               v               v               v      |
+|             history_req    out_of_scope    general_q/       needs_retrieval
+|                    |               |       follow_up              |       |
+|                    |               |       (no retrieval)         |       |
+|                    |               |               |              v       |
+|                    |               |               |    +--------------------+
+|                    |               |               |    |       Router       |
+|                    |               |               |    |  (Fast + LLM)      |
+|                    |               |               |    +---------+----------+
+|                    |               |               |              |       |
+|                    |               |               |              v       |
+|                    |               |               |    +--------------------+
+|                    |               |               |    |     Retrieval      |
+|                    |               |               |    |  (BM25 + FAISS)    |
+|                    |               |               |    +---------+----------+
+|                    |               |               |              |       |
+|                    |               |               +------+-------+       |
+|                    |               |                      |               |
+|                    |               |                      v               |
+|                    |               |            +--------------------+    |
+|                    |               |            |     Synthesis      |    |
+|                    |               |            |   (w/ Streaming)   |    |
+|                    |               |            +---------+----------+    |
+|                    |               |                      |               |
+|                    +----------+---+----------------------+               |
 |                               |                                           |
 |                               v                                           |
 |                    +--------------------+                                 |
@@ -77,9 +78,10 @@ The agent layer is the **orchestration backbone** of the system. Architectural d
 +===========================================================================+
 ```
 
-**Key Paths (v1.3):**
+**Key Paths (v1.4):**
 - `history_request` → Skip to conversation_memory (return history summary)
-- `follow_up` (history sufficient) → Skip to synthesis (no retrieval needed)
+- `out_of_scope` → Skip to conversation_memory (return polite rejection)
+- `general_question` / `follow_up` (history sufficient) → Skip to synthesis (no retrieval needed)
 - `follow_up_with_retrieval` / `new_question` → Router → Retrieval → Synthesis
 
 ---
@@ -148,18 +150,32 @@ The agent layer is the **orchestration backbone** of the system. Architectural d
 | Regex only | <1ms | Low (misses implicit refs) | Zero |
 | **Hybrid (Regex → LLM fallback)** | <1ms or ~500ms | **High** | **Optimized** |
 
-**Decision:** Two-stage hybrid classification with **four intent types**:
-1. **Fast path:** Regex patterns for explicit history queries (<1ms)
-2. **LLM fallback:** Intent classification only when history exists (~500ms)
+**Decision:** Two-stage hybrid classification with **six intent types**:
+1. **Fast path:** Regex patterns for explicit history queries and greetings (<1ms)
+2. **LLM fallback:** Intent classification for ambiguous queries (~500ms)
 
-**Intent Types (v1.3):**
+**Intent Types (v1.4):**
 
 | Intent | Description | Needs Retrieval | Example |
 |--------|-------------|-----------------|---------|
+| `out_of_scope` | Query contains non-HTTPX code | ❌ No | "GitHubClient().fetch() returns empty" |
+| `general_question` | General question NOT about HTTPX codebase | ❌ No | "Hello", "What is async/await?" |
 | `history_request` | User asks about conversation history | ❌ No | "What did I ask earlier?" |
 | `follow_up` | References history AND history is sufficient | ❌ No | "Can you explain that simpler?" |
 | `follow_up_with_retrieval` | References history BUT needs new info | ✅ Yes | "Also show me the tests for that" |
-| `new_question` | Independent question | ✅ Yes | "How does BM25 work?" |
+| `new_question` | HTTPX-specific question needing retrieval | ✅ Yes | "How does httpx.Client work?" |
+
+**Out-of-Scope Detection (v1.4):**
+
+The `out_of_scope` intent is checked **first** to reject queries containing non-HTTPX code:
+- Code using other HTTP libraries: `requests`, `aiohttp`, `urllib`, `http.client`
+- Custom clients not from httpx: `GitHubClient`, `APIClient`, etc.
+- Code snippets that don't import or use `httpx.*` classes
+
+**HTTPX Identifiers Recognized (In Scope):**
+- `httpx.Client`, `httpx.AsyncClient`, `httpx.get`, `httpx.post`, `httpx.put`, `httpx.delete`
+- `httpx.Request`, `httpx.Response`, `httpx.HTTPTransport`, `httpx.AsyncHTTPTransport`
+- `httpx.Timeout`, `httpx.Limits`, `httpx.Auth`, `httpx.BasicAuth`, `httpx.DigestAuth`
 
 **Algorithm:**
 
@@ -168,17 +184,26 @@ Query: "Also show me the error handling for that class"
          |
          v
 +---------------------------+
-| Stage 1: Regex Patterns   |  <-- Matches explicit history patterns
+| Stage 1a: Regex Patterns  |  <-- Matches explicit history patterns
 | "what did I ask/say..."   |
 +---------------------------+
          | Match? → Return history response (needs_retrieval=False)
          | No match
          v
 +---------------------------+
-| Stage 2: LLM Classification|  <-- Only if conversation_history exists
+| Stage 1b: Regex Patterns  |  <-- Matches greetings/simple responses
+| "hi", "thanks", "ok"      |
++---------------------------+
+         | Match? → Return general_question (needs_retrieval=False)
+         | No match
+         v
++---------------------------+
+| Stage 2: LLM Classification|  <-- Classifies intent with structured output
 | (Uses structured output)   |
 +---------------------------+
          |
+         ├── out_of_scope → Return polite rejection (needs_retrieval=False)
+         ├── general_question → Skip to synthesis (needs_retrieval=False)
          ├── history_request → Return history summary (needs_retrieval=False)
          ├── follow_up → Resolve references, skip to synthesis (needs_retrieval=False)
          ├── follow_up_with_retrieval → Resolve refs, go to router (needs_retrieval=True)
@@ -194,10 +219,11 @@ This distinction is critical for handling queries like:
 The LLM determines if the previous answer contains enough information to answer the new query, or if fresh retrieval is needed.
 
 **Rationale:**
-- 80% of queries are new questions (no LLM call needed)
-- LLM only invoked for ambiguous queries with existing history
+- Fast path handles greetings and explicit history queries (<1ms)
+- LLM classification detects out-of-scope queries early (saves retrieval costs)
 - Structured output ensures consistent classification
 - `needs_retrieval` flag prevents unnecessary LLM calls when history suffices
+- Out-of-scope detection ensures agent focuses exclusively on HTTPX codebase
 
 **Implementation:** [input_preprocessor.py](../src/agent/nodes/input_preprocessor.py)
 
@@ -355,11 +381,13 @@ class AgentState(TypedDict, total=False):
     gateway_reason: str | None
     is_blocked: bool | None
 
-    # ═══ INPUT PREPROCESSING (v1.3) ═══
+    # ═══ INPUT PREPROCESSING (v1.4) ═══
     cleaned_query: str | None
     is_history_query: bool | None
     is_follow_up: bool | None
-    needs_retrieval: bool | None  # v1.3: Whether fresh retrieval is needed
+    is_general_question: bool | None  # v1.3: General question (no retrieval)
+    is_out_of_scope: bool | None      # v1.4: Non-HTTPX code detected
+    needs_retrieval: bool | None      # v1.3: Whether fresh retrieval is needed
 
     # ═══ ROUTER ═══
     router_output: RouterOutput | None
@@ -389,7 +417,7 @@ class AgentState(TypedDict, total=False):
 
 ## Graph Flow
 
-### Complete Pipeline (v1.3)
+### Complete Pipeline (v1.4)
 
 ```
 START
@@ -416,33 +444,33 @@ START
               │ Intent classification   │
               └───────┬────────────────┘
                       │
-    ┌─────────────────┼─────────────────┐
-    │                 │                 │
-    ▼                 ▼                 ▼
-history_req    follow_up (no       follow_up_with_retrieval
-               retrieval)          OR new_question
-    │                 │                 │
-    ▼                 │                 ▼
-┌────────────┐        │      ┌─────────────────────────┐
-│  Return    │        │      │       3. Router         │
-│  history   │        │      │  (Fast path + LLM)      │
-│  summary   │        │      └───────────┬─────────────┘
-└─────┬──────┘        │                  │
-      │               │                  ▼
-      │               │      ┌─────────────────────────┐
-      │               │      │      4. Retrieval       │
-      │               │      │   (BM25 + FAISS + RRF)  │
-      │               │      └───────────┬─────────────┘
-      │               │                  │
-      │               └────────┬─────────┘
-      │                        │
-      │                        ▼
-      │            ┌─────────────────────────┐
-      │            │      5. Synthesis       │
-      │            │   (Streaming + Cite)    │
-      │            └───────────┬─────────────┘
-      │                        │
-      └──────────┬─────────────┘
+    ┌─────────┬───────┼───────┬─────────┐
+    │         │       │       │         │
+    ▼         ▼       ▼       ▼         ▼
+history   out_of   general  follow_up  follow_up_with_retrieval
+_req      _scope   _quest   (no retr)  OR new_question
+    │         │       │       │         │
+    │         │       │       │         ▼
+    │         │       │       │  ┌─────────────────────────┐
+    │         │       │       │  │       3. Router         │
+    │         │       │       │  │  (Fast path + LLM)      │
+    │         │       │       │  └───────────┬─────────────┘
+    │         │       │       │              │
+    │         │       │       │              ▼
+    │         │       │       │  ┌─────────────────────────┐
+    │         │       │       │  │      4. Retrieval       │
+    │         │       │       │  │   (BM25 + FAISS + RRF)  │
+    │         │       │       │  └───────────┬─────────────┘
+    │         │       │       │              │
+    │         │       └───────┼──────────────┘
+    │         │               │
+    │         │               ▼
+    │         │    ┌─────────────────────────┐
+    │         │    │      5. Synthesis       │
+    │         │    │   (Streaming + Cite)    │
+    │         │    └───────────┬─────────────┘
+    │         │                │
+    └─────────┴────────────────┘
                  │
                  ▼
       ┌─────────────────────────┐
@@ -457,7 +485,7 @@ history_req    follow_up (no       follow_up_with_retrieval
 ### Conditional Routing Logic
 
 ```python
-# routing.py - Edge conditions (v1.3)
+# routing.py - Edge conditions (v1.4)
 
 def route_after_security(state: AgentState) -> str:
     """Route based on security validation."""
@@ -466,15 +494,23 @@ def route_after_security(state: AgentState) -> str:
     return "input_preprocessor"
 
 def route_after_input_preprocessor(state: AgentState) -> str:
-    """Route based on query intent and retrieval needs (v1.3).
+    """Route based on query intent and retrieval needs (v1.4).
 
-    Three possible paths:
+    Five possible paths:
     1. history_request → conversation_memory (final_answer already set)
-    2. follow_up (no retrieval) → synthesis (use history context)
-    3. follow_up_with_retrieval / new_question → router (needs fresh data)
+    2. out_of_scope → conversation_memory (final_answer has rejection message)
+    3. general_question → synthesis (LLM can answer without retrieval)
+    4. follow_up (no retrieval) → synthesis (use history context)
+    5. follow_up_with_retrieval / new_question → router (needs fresh data)
     """
     if state.get("is_history_query"):
         return "conversation_memory"  # History query shortcut
+
+    if state.get("is_out_of_scope"):
+        return "conversation_memory"  # Out of scope - polite rejection
+
+    if state.get("is_general_question"):
+        return "synthesis"  # General question - no retrieval needed
 
     if not state.get("needs_retrieval", True):
         return "synthesis"  # Follow-up with sufficient history
@@ -482,7 +518,7 @@ def route_after_input_preprocessor(state: AgentState) -> str:
     return "router"  # New question or follow-up needing retrieval
 ```
 
-**Key Change (v1.3):** The `follow_up` intent now skips retrieval when conversation history contains sufficient information to answer the query. This prevents unnecessary LLM calls when users ask for clarification or rephrasing.
+**Key Change (v1.4):** Added `out_of_scope` intent to reject queries containing non-HTTPX code. The agent now focuses exclusively on HTTPX-related questions. Queries using other HTTP libraries (requests, aiohttp, etc.) or custom clients are politely declined with guidance on what the agent can help with.
 
 **Implementation:** [routing.py](../src/agent/routing.py)
 
