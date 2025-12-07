@@ -1,8 +1,13 @@
 # Retrieval Architecture PRD
 
-**Version**: 1.1
-**Last Updated**: 2025-01-05
+**Version**: 1.2
+**Last Updated**: 2025-12-07
 **Status**: Implementation Ready
+
+**Change Log (v1.2)**:
+- ✅ Soft folder filtering (boost, not exclude) to preserve recall
+- ✅ RRF_FOLDER_BOOST setting (default: 1.3x) for folder matches
+- ✅ Simplified fallback chain (file_patterns only)
 
 **Change Log (v1.1)**:
 - ✅ Weighted RRF (0.4/1.0) for class chunk recall
@@ -84,8 +89,8 @@ This document specifies the retrieval architecture for the Code RAG Agent. The s
 │  │                                    │  │
 │  │  1. Metadata Filter (RAM)          │  │
 │  │     • Filter by source_types       │  │
-│  │     • Filter by folders/files      │  │
-│  │     • Get candidate chunk IDs      │  │
+│  │     • Filter by file_patterns      │  │
+│  │     • Folders: SOFT (v1.2)         │  │
 │  │                                    │  │
 │  │  2. BM25 Search (rank_bm25)        │  │
 │  │     • Search filtered corpus       │  │
@@ -100,7 +105,11 @@ This document specifies the retrieval architecture for the Code RAG Agent. The s
 │  │     • Weighted: BM25=0.4, Vec=1.0  │  │
 │  │     • Favors semantic for classes  │  │
 │  │                                    │  │
-│  │  5. Get Top-K (K=20)               │  │
+│  │  5. Folder Boost (v1.2)            │  │
+│  │     • Boost folder matches by 1.3x │  │
+│  │     • Re-rank by boosted scores    │  │
+│  │                                    │  │
+│  │  6. Get Top-K (K=20)               │  │
 │  │     • Return chunk IDs             │  │
 │  └────────────────────────────────────┘  │
 │  • Latency: ~200-500ms per request       │
@@ -498,7 +507,7 @@ class RouterOutput(BaseModel):
 
 ---
 
-### 3. Metadata Filtering
+### 3. Metadata Filtering (v1.2 - Soft Folder Filtering)
 
 #### **Metadata Schema**
 
@@ -521,11 +530,17 @@ class ChunkMetadata(BaseModel):
     headers: Dict[str, str] = Field(default_factory=dict)
 ```
 
-#### **Filtering Logic**
+#### **Filtering Logic (v1.2)**
+
+**v1.2 Change**: Folder filtering is now SOFT (boost, not exclude). This prevents
+LLM folder inference from reducing recall when it guesses wrong.
 
 ```python
 class MetadataFilter:
-    """Apply metadata filters before search."""
+    """Apply metadata filters before search (v1.2 - soft folder filtering).
+
+    v1.2: Folders no longer exclude chunks - they boost RRF scores instead.
+    """
 
     def __init__(
         self,
@@ -536,12 +551,14 @@ class MetadataFilter:
         self.request = request
 
     def apply(self) -> list[str]:
-        """Return filtered chunk IDs that match all criteria.
+        """Return filtered chunk IDs that match source_type and file_patterns.
 
-        Filter order (most to least selective):
-        1. Source type (select relevant indices)
-        2. File patterns (if specified)
-        3. Folders (if specified)
+        v1.2: Folder filtering removed (now soft boost in RRF).
+
+        Filter order:
+        1. Source type (select relevant indices) - HARD filter
+        2. File patterns (if specified) - HARD filter
+        3. Folders - NOT applied (soft boost handled in HybridRetriever)
         """
         candidate_ids = []
 
@@ -549,7 +566,7 @@ class MetadataFilter:
         for source_type in self.request.source_types:
             for chunk_meta in self.metadata_index[source_type]:
 
-                # 2. Filter by file patterns (if specified)
+                # 2. Filter by file patterns (if specified) - HARD filter
                 if self.request.file_patterns:
                     if not self._matches_file_pattern(
                         chunk_meta.filename,
@@ -557,13 +574,8 @@ class MetadataFilter:
                     ):
                         continue
 
-                # 3. Filter by folders (if specified)
-                if self.request.folders:
-                    if not self._matches_folder(
-                        chunk_meta.file_path,
-                        self.request.folders
-                    ):
-                        continue
+                # 3. Folders - NOT filtered here (soft boost in RRF)
+                # This prevents LLM folder inference from reducing recall
 
                 # Passed all filters
                 candidate_ids.append(chunk_meta.id)
@@ -578,15 +590,55 @@ class MetadataFilter:
         """Check if filename matches any pattern (supports wildcards)."""
         from fnmatch import fnmatch
         return any(fnmatch(filename, pattern) for pattern in patterns)
-
-    def _matches_folder(
-        self,
-        file_path: str,
-        folders: list[str]
-    ) -> bool:
-        """Check if file path starts with any target folder."""
-        return any(file_path.startswith(folder) for folder in folders)
 ```
+
+#### **Folder Boost (v1.2)**
+
+Folders are now handled via score boosting in RRF, not exclusion:
+
+```python
+def _apply_folder_boost(
+    self,
+    ranked_ids: list[tuple[str, float]],
+    folders: list[str],
+    chunk_file_paths: dict[str, str],
+    boost_factor: float = 1.3  # RRF_FOLDER_BOOST
+) -> list[tuple[str, float]]:
+    """Apply folder boost to chunks matching inferred folders (v1.2).
+
+    Chunks whose file_path starts with any of the specified folders
+    get their RRF score multiplied by boost_factor.
+
+    This is SOFT filtering - non-matching chunks are NOT excluded.
+    """
+    boosted_results = []
+
+    for chunk_id, score in ranked_ids:
+        file_path = chunk_file_paths.get(chunk_id, "")
+
+        # Check if file_path matches any folder
+        matches_folder = any(
+            file_path.startswith(folder)
+            for folder in folders
+        )
+
+        if matches_folder:
+            boosted_score = score * boost_factor
+        else:
+            boosted_score = score
+
+        boosted_results.append((chunk_id, boosted_score))
+
+    # Re-sort by boosted score
+    boosted_results.sort(key=lambda x: x[1], reverse=True)
+    return boosted_results
+```
+
+**Rationale for Soft Filtering**:
+- LLM router infers folders from codebase tree (e.g., "HTTPTransport" → `httpx/_transports/`)
+- If LLM guesses wrong folder, hard filtering would exclude ALL relevant results
+- Soft boosting ensures folder hints help ranking without hurting recall
+- Default boost (1.3x) is enough to prioritize folder matches without dominating
 
 ---
 
@@ -1363,6 +1415,9 @@ MAX_RETRIEVAL_REQUESTS = 5  # Limit router output to prevent explosion
 RRF_BM25_WEIGHT = 0.4  # Reduced weight for BM25 (prevents length bias)
 RRF_VECTOR_WEIGHT = 1.0  # Full weight for FAISS vector search
 
+# Folder boost (v1.2) - Soft filtering to preserve recall
+RRF_FOLDER_BOOST = 1.3  # Chunks matching LLM-inferred folders get 1.3x boost
+
 # Context expansion limits
 MAX_RELATED_METHODS = 3  # Code: sibling methods to include
 MAX_IMPORTS = 5  # Code: import statements to include
@@ -1709,6 +1764,8 @@ def test_end_to_end_retrieval():
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 1.2 | 2025-12-07 | Soft folder filtering (boost, not exclude), RRF_FOLDER_BOOST setting |
+| 1.1 | 2025-01-05 | Weighted RRF, code-aware BM25 tokenization, fast path router |
 | 1.0 | 2025-01-05 | Initial PRD (hybrid retrieval, metadata filtering, context expansion) |
 
 ---

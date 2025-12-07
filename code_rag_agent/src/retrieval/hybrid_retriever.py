@@ -1,14 +1,15 @@
 """Hybrid retrieval combining BM25 and FAISS with weighted RRF.
 
 This module implements the core retrieval architecture specified in
-RETRIEVAL_ARCHITECTURE.md v1.1, featuring:
+RETRIEVAL_ARCHITECTURE.md v1.2, featuring:
 - Weighted Reciprocal Rank Fusion (0.4/1.0 for BM25/Vector)
 - Code-aware BM25 tokenization (camelCase, snake_case splitting)
 - Graduated fallback to prevent zero-result failures
-- Metadata-based filtering
+- Soft folder filtering (boost, not exclude) to preserve recall
+- Metadata-based filtering for source_type and file_patterns
 
 Author: Hay Hoffman
-Version: 1.1
+Version: 1.2
 """
 
 import logging
@@ -23,6 +24,7 @@ from settings import (
     BM25_SPLIT_CAMELCASE,
     BM25_SPLIT_SNAKE_CASE,
     RRF_BM25_WEIGHT,
+    RRF_FOLDER_BOOST,
     RRF_K,
     RRF_VECTOR_WEIGHT,
 )
@@ -35,13 +37,17 @@ __all__ = ["HybridRetriever"]
 
 
 class HybridRetriever:
-    """Hybrid retrieval combining BM25 and FAISS with weighted RRF (v1.1).
+    """Hybrid retrieval combining BM25 and FAISS with weighted RRF (v1.2).
 
-    Key Features (v1.1):
+    Key Features (v1.2):
     - Weighted RRF (BM25: 0.4, Vector: 1.0) for class chunk recall
     - Code-aware tokenization (camelCase/snake_case splitting)
     - Graduated fallback (4 levels) to prevent zero results
-    - Metadata filtering with relaxation strategy
+    - SOFT folder filtering: boost scores for folder matches (don't exclude)
+    - Metadata filtering for source_type and file_patterns only
+
+    v1.2 Change: Folder filtering is now SOFT (boost, not exclude).
+    This prevents LLM folder inference from reducing recall when it guesses wrong.
 
     Attributes:
         metadata_index: Chunk metadata for filtering
@@ -51,6 +57,7 @@ class HybridRetriever:
         bm25_cache: Cached BM25 indices for reuse
         bm25_weight: Weight for BM25 in RRF scoring
         vector_weight: Weight for vector search in RRF scoring
+        folder_boost: Multiplier for chunks matching inferred folders
         _embedding_model: Cached SentenceTransformer model (lazy-loaded)
     """
 
@@ -63,6 +70,7 @@ class HybridRetriever:
         index_dir: Path | None = None,
         bm25_weight: float = RRF_BM25_WEIGHT,
         vector_weight: float = RRF_VECTOR_WEIGHT,
+        folder_boost: float = RRF_FOLDER_BOOST,
         *,
         # Alternative: pass pre-built components directly
         metadata_index: dict[str, list] | None = None,
@@ -80,12 +88,14 @@ class HybridRetriever:
             index_dir: Directory containing FAISS indices (path-based init)
             bm25_weight: Weight for BM25 in RRF scoring (default: 0.4)
             vector_weight: Weight for vector search in RRF scoring (default: 1.0)
+            folder_boost: Multiplier for chunks matching inferred folders (default: 1.3)
             metadata_index: Pre-built mapping of source_type -> list of chunk metadata
             faiss_store: Pre-built FAISSStore instance
             chunk_loader: Pre-built ChunkLoader instance
         """
         self.bm25_weight = bm25_weight
         self.vector_weight = vector_weight
+        self.folder_boost = folder_boost
 
         # Path-based initialization
         if chunks_dir is not None and index_dir is not None:
@@ -126,7 +136,8 @@ class HybridRetriever:
         logger.info(
             f"HybridRetriever initialized: "
             f"{sum(len(v) for v in self.metadata_index.values())} chunks, "
-            f"bm25_weight={bm25_weight}, vector_weight={vector_weight}"
+            f"bm25_weight={bm25_weight}, vector_weight={vector_weight}, "
+            f"folder_boost={folder_boost}"
         )
 
     def _build_metadata_index(self, chunk_loader) -> dict[str, list]:
@@ -173,23 +184,23 @@ class HybridRetriever:
         request: RetrievalRequest,
         top_k: int = 20
     ) -> list[RetrievedChunk]:
-        """Execute hybrid search with graduated fallback (v1.1).
+        """Execute hybrid search with soft folder boosting (v1.2).
 
-        v1.1 Update: Added graduated relaxation to prevent zero-result failures
-        when LLM router hallucinates file patterns or folder names.
+        v1.2 Update: Folder filtering is now SOFT (boost, not exclude).
+        This prevents LLM folder inference from reducing recall.
 
         Steps:
-        1. Metadata filtering (with 4-level fallback)
+        1. Metadata filtering (source_type + file_patterns only)
         2. BM25 search (on filtered corpus with code-aware tokenization)
         3. FAISS search (on filtered vectors)
         4. Weighted RRF ranking (0.4/1.0 for BM25/Vector)
-        5. Return top-k chunks
+        5. Apply folder boost to chunks matching inferred folders
+        6. Return top-k chunks
 
-        Fallback chain:
-        - Attempt 1: Strict (source_types + folders + file_patterns)
-        - Attempt 2: Relaxed-1 (drop file_patterns, keep folders)
-        - Attempt 3: Relaxed-2 (drop folders, keep source_types)
-        - Attempt 4: Emergency (search all source_types)
+        Fallback chain (for file_patterns only):
+        - Attempt 1: With file_patterns
+        - Attempt 2: Drop file_patterns if zero results
+        - Attempt 3: Emergency (search all source_types)
 
         Args:
             request: Retrieval request with query and filters
@@ -198,9 +209,9 @@ class HybridRetriever:
         Returns:
             list of RetrievedChunk objects sorted by relevance
         """
-        # 1. Attempt strict filtering
         from src.retrieval.metadata_filter import MetadataFilter
 
+        # 1. Metadata filtering (source_type + file_patterns, NOT folders)
         candidate_ids = MetadataFilter(
             self.metadata_index,
             request
@@ -209,8 +220,8 @@ class HybridRetriever:
         # Fallback 1: Drop file_patterns if zero results
         if not candidate_ids and request.file_patterns:
             logger.info(
-                f"Strict file patterns {request.file_patterns} yielded 0 results. "
-                f"Relaxing to folder-level filtering."
+                f"File patterns {request.file_patterns} yielded 0 results. "
+                f"Relaxing to source_type-only filtering."
             )
             relaxed_request = request.model_copy(update={"file_patterns": []})
             candidate_ids = MetadataFilter(
@@ -218,22 +229,7 @@ class HybridRetriever:
                 relaxed_request
             ).apply()
 
-        # Fallback 2: Drop folders if still zero
-        if not candidate_ids and request.folders:
-            logger.info(
-                f"Folder filtering {request.folders} yielded 0 results. "
-                f"Relaxing to source_type-only filtering."
-            )
-            relaxed_request = request.model_copy(update={
-                "file_patterns": [],
-                "folders": []
-            })
-            candidate_ids = MetadataFilter(
-                self.metadata_index,
-                relaxed_request
-            ).apply()
-
-        # Fallback 3: Emergency - search all source_types
+        # Fallback 2: Emergency - search all source_types
         if not candidate_ids:
             logger.warning(
                 "All filters yielded 0 results. Emergency fallback: searching all source_types."
@@ -260,7 +256,10 @@ class HybridRetriever:
             f"for query: {request.query}"
         )
 
-        # 2. BM25 search (code-aware tokenization in v1.1)
+        # Build chunk_id -> file_path mapping for folder boost
+        chunk_file_paths = self._get_chunk_file_paths(candidate_ids)
+
+        # 2. BM25 search (code-aware tokenization)
         bm25_results = self._bm25_search(
             query=request.query,
             candidate_ids=candidate_ids,
@@ -284,10 +283,22 @@ class HybridRetriever:
             vector_weight=self.vector_weight
         )
 
-        # 5. Get top-k
+        # 5. Apply folder boost (soft filtering - boost, don't exclude)
+        if request.folders:
+            ranked_ids = self._apply_folder_boost(
+                ranked_ids=ranked_ids,
+                folders=request.folders,
+                chunk_file_paths=chunk_file_paths,
+                boost_factor=self.folder_boost
+            )
+            logger.info(
+                f"Applied folder boost ({self.folder_boost}x) for folders: {request.folders}"
+            )
+
+        # 6. Get top-k
         top_results = ranked_ids[:top_k]
 
-        # 6. Load full chunks and attach metadata
+        # 7. Load full chunks and attach metadata
         retrieved_chunks = []
         for chunk_id, rrf_score in top_results:
             chunk = self.chunk_loader.load_chunk(chunk_id)
@@ -562,6 +573,82 @@ class HybridRetriever:
 
         # Return list of (chunk_id, score) tuples for score access
         return ranked_ids
+
+    def _get_chunk_file_paths(
+        self,
+        candidate_ids: list[str]
+    ) -> dict[str, str]:
+        """Get file_path for each chunk ID from metadata index.
+
+        Args:
+            candidate_ids: List of chunk IDs
+
+        Returns:
+            Dict mapping chunk_id -> file_path
+        """
+        chunk_file_paths = {}
+
+        # Build a quick lookup from all metadata
+        for source_type, chunks_meta in self.metadata_index.items():
+            for meta in chunks_meta:
+                if meta.id in candidate_ids:
+                    chunk_file_paths[meta.id] = meta.file_path
+
+        return chunk_file_paths
+
+    def _apply_folder_boost(
+        self,
+        ranked_ids: list[tuple[str, float]],
+        folders: list[str],
+        chunk_file_paths: dict[str, str],
+        boost_factor: float = 1.3
+    ) -> list[tuple[str, float]]:
+        """Apply folder boost to chunks matching inferred folders (v1.2).
+
+        Chunks whose file_path starts with any of the specified folders
+        get their RRF score multiplied by boost_factor.
+
+        This is SOFT filtering - non-matching chunks are NOT excluded,
+        just ranked lower.
+
+        Args:
+            ranked_ids: List of (chunk_id, rrf_score) tuples
+            folders: List of folder prefixes (e.g., ["httpx/_transports/"])
+            chunk_file_paths: Mapping of chunk_id -> file_path
+            boost_factor: Multiplier for matching chunks (default: 1.3)
+
+        Returns:
+            Re-sorted list of (chunk_id, boosted_score) tuples
+
+        Example:
+            >>> ranked = [("chunk1", 0.5), ("chunk2", 0.4)]
+            >>> paths = {"chunk1": "httpx/_client.py", "chunk2": "httpx/_transports/base.py"}
+            >>> folders = ["httpx/_transports/"]
+            >>> self._apply_folder_boost(ranked, folders, paths, 1.3)
+            [("chunk2", 0.52), ("chunk1", 0.5)]  # chunk2 boosted and reranked
+        """
+        boosted_results = []
+
+        for chunk_id, score in ranked_ids:
+            file_path = chunk_file_paths.get(chunk_id, "")
+
+            # Check if file_path matches any folder
+            matches_folder = any(
+                file_path.startswith(folder)
+                for folder in folders
+            )
+
+            if matches_folder:
+                boosted_score = score * boost_factor
+            else:
+                boosted_score = score
+
+            boosted_results.append((chunk_id, boosted_score))
+
+        # Re-sort by boosted score
+        boosted_results.sort(key=lambda x: x[1], reverse=True)
+
+        return boosted_results
 
     def retrieve(
         self,

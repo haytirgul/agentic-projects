@@ -222,6 +222,10 @@ MAX_RETRIEVAL_REQUESTS: int = int(os.getenv("MAX_RETRIEVAL_REQUESTS", "5"))
 RRF_BM25_WEIGHT: float = float(os.getenv("RRF_BM25_WEIGHT", "0.4"))
 RRF_VECTOR_WEIGHT: float = float(os.getenv("RRF_VECTOR_WEIGHT", "1.0"))
 
+# Folder boost (soft filtering - boost, don't exclude)
+# Chunks matching LLM-inferred folders get this multiplier on RRF score
+RRF_FOLDER_BOOST: float = float(os.getenv("RRF_FOLDER_BOOST", "1.3"))
+
 
 # -----------------------------------------------------------------------------
 # Context Expansion Limits
@@ -385,6 +389,7 @@ __all__ = [
     "MAX_RETRIEVAL_REQUESTS",
     "RRF_BM25_WEIGHT",
     "RRF_VECTOR_WEIGHT",
+    "RRF_FOLDER_BOOST",
     # Context Expansion
     "MAX_RELATED_METHODS",
     "MAX_IMPORTS",

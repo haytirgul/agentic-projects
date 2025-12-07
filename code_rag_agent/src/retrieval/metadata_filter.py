@@ -1,11 +1,13 @@
 """Metadata filtering for retrieval requests.
 
 This module implements RAM-based metadata filtering to reduce the search space
-before running BM25 and FAISS searches. Filters by source_type, folders, and
-file patterns.
+before running BM25 and FAISS searches. Filters by source_type and file patterns.
+
+Note: Folder filtering uses SOFT matching (boost scores, not exclusion) to prevent
+LLM folder inference from reducing recall. See HybridRetriever for folder boost logic.
 
 Author: Hay Hoffman
-Version: 1.1
+Version: 1.2
 """
 
 import logging
@@ -63,16 +65,18 @@ class ChunkMetadata:
 
 
 class MetadataFilter:
-    """Apply metadata filters before search.
+    """Apply metadata filters before search (v1.2 - soft folder filtering).
 
-    Filters chunks by source_type, file patterns, and folders to reduce
-    the search space for BM25 and FAISS. All filtering happens in RAM
-    for maximum performance.
+    Filters chunks by source_type and file patterns to reduce the search space.
+    Folder filtering is now SOFT (handled via RRF boost in HybridRetriever).
 
-    Filter order (most to least selective):
+    v1.2 Change: Folders no longer exclude chunks - they boost RRF scores instead.
+    This prevents LLM folder inference from reducing recall when it guesses wrong.
+
+    Filter order:
     1. Source type (select relevant indices)
-    2. File patterns (if specified)
-    3. Folders (if specified)
+    2. File patterns (if specified) - HARD filter
+    3. Folders - NOT applied here (soft boost in RRF)
 
     Attributes:
         metadata_index: Mapping of source_type -> list of chunk metadata
@@ -94,15 +98,17 @@ class MetadataFilter:
         self.request = request
 
     def apply(self) -> list[str]:
-        """Return filtered chunk IDs that match all criteria.
+        """Return filtered chunk IDs that match source_type and file_patterns.
 
-        Filter order (most to least selective):
-        1. Source type (select relevant indices)
-        2. File patterns (if specified)
-        3. Folders (if specified)
+        v1.2: Folder filtering removed (now soft boost in RRF).
+
+        Filter order:
+        1. Source type (select relevant indices) - HARD filter
+        2. File patterns (if specified) - HARD filter
+        3. Folders - NOT applied (soft boost handled in HybridRetriever)
 
         Returns:
-            list of chunk IDs that pass all filters
+            list of chunk IDs that pass source_type and file_pattern filters
         """
         candidate_ids = []
 
@@ -112,7 +118,7 @@ class MetadataFilter:
             chunks_for_type = self.metadata_index.get(source_type, [])
 
             for chunk_meta in chunks_for_type:
-                # 2. Filter by file patterns (if specified)
+                # 2. Filter by file patterns (if specified) - HARD filter
                 if self.request.file_patterns:
                     if not self._matches_file_pattern(
                         chunk_meta.filename,
@@ -120,13 +126,8 @@ class MetadataFilter:
                     ):
                         continue
 
-                # 3. Filter by folders (if specified)
-                if self.request.folders:
-                    if not self._matches_folder(
-                        chunk_meta.file_path,
-                        self.request.folders
-                    ):
-                        continue
+                # 3. Folders - NOT filtered here (soft boost in RRF)
+                # This prevents LLM folder inference from reducing recall
 
                 # Passed all filters
                 candidate_ids.append(chunk_meta.id)
@@ -134,8 +135,8 @@ class MetadataFilter:
         logger.debug(
             f"Metadata filter: {len(candidate_ids)} candidates "
             f"from source_types={self.request.source_types}, "
-            f"folders={self.request.folders}, "
-            f"file_patterns={self.request.file_patterns}"
+            f"file_patterns={self.request.file_patterns} "
+            f"(folders={self.request.folders} will boost RRF scores)"
         )
 
         return candidate_ids
