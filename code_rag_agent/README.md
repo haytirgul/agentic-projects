@@ -225,18 +225,18 @@ Turn 3:
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                         User Query                               │
+│                         User Query                              │
 └─────────────────────────────────────────────────────────────────┘
                                │
                                ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│                    Security Gateway                              │
+│                    Security Gateway                             │
 │              (ProtectAI DeBERTa v3 - Prompt Injection)          │
 └─────────────────────────────────────────────────────────────────┘
                                │
                                ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│                   Input Preprocessor                             │
+│                   Input Preprocessor                            │
 │    (Intent Classification: history/follow-up/new/out-of-scope)  │
 └─────────────────────────────────────────────────────────────────┘
                                │
@@ -252,10 +252,10 @@ Turn 3:
                                                 ▼
                                ┌─────────────────────────────────┐
                                │         Hybrid Retrieval        │
-                               │   ┌─────────┐   ┌─────────┐    │
-                               │   │  BM25   │ + │  FAISS  │    │
-                               │   │ (0.4w)  │   │ (1.0w)  │    │
-                               │   └─────────┘   └─────────┘    │
+                               │   ┌─────────┐   ┌─────────┐     │
+                               │   │  BM25   │ + │  FAISS  │     │
+                               │   │ (0.4w)  │   │ (1.0w)  │     │
+                               │   └─────────┘   └─────────┘     │
                                │         ↓ RRF Fusion ↓          │
                                │      Context Expansion          │
                                └─────────────────────────────────┘
@@ -409,57 +409,6 @@ result = app.invoke(
 print(result["final_answer"])
 print(result["citations"])
 ```
-
-### Streaming Output
-
-```python
-for event in app.stream(
-    {"user_query": "Explain connection pooling"},
-    {"configurable": {"thread_id": "session_123"}}
-):
-    if "final_answer" in event:
-        print(event["final_answer"], end="", flush=True)
-```
-
-## Development
-
-### Running Tests
-
-```bash
-pytest tests/ -v
-```
-
-### Code Quality
-
-```bash
-# Format code
-ruff format .
-
-# Lint and fix
-ruff check . --fix
-
-# Type checking
-mypy src/ --ignore-missing-imports
-```
-
-### Rebuilding Indices
-
-After updating the HTTPX repository:
-
-```bash
-python scripts/data_pipeline/indexing/build_all_indices.py
-```
-
-## Requirements
-
-- Python 3.10+
-- ~2GB disk space (models + indices)
-- Google AI API key
-
-## License
-
-MIT
-
 ## Author
 
 Hay Hoffman
