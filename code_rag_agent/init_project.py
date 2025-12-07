@@ -14,7 +14,7 @@ Run this after cloning the repository:
     python init_project.py
 
 Author: Hay Hoffman
-Version: 1.1
+Version: 1.2
 """
 
 import logging
@@ -163,23 +163,23 @@ class ProjectInitializer:
             logger.warning(".env file not found!")
             logger.info("Creating .env template...")
 
-            template = """# Required: Google Gemini API Key
+            template = """# =============================================================================
+# CODE RAG AGENT - Environment Configuration
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# REQUIRED: Google Gemini API Key
+# -----------------------------------------------------------------------------
+# Get your API key from: https://aistudio.google.com/apikey
 GOOGLE_API_KEY=your_google_api_key_here
 
-# Optional: OpenAI API Key (for alternative models)
-OPENAI_API_KEY=your_openai_api_key_here
-
-# Optional: LangSmith Tracing
-LANGCHAIN_TRACING_V2=false
-LANGCHAIN_API_KEY=your_langsmith_api_key_here
-LANGCHAIN_PROJECT=code-rag-agent
-
-# Logging
-LOG_LEVEL=INFO
-
-# Performance Tuning (usually no need to change)
-LAZY_INITIALIZATION=true
-ENABLE_STREAMING=true
+# -----------------------------------------------------------------------------
+# OPTIONAL: LangSmith Tracing (for debugging and observability)
+# -----------------------------------------------------------------------------
+# Enable tracing: set to "true" and provide your LangSmith API key
+# Get your API key from: https://smith.langchain.com/
+# LANGCHAIN_TRACING_V2=false
+# LANGCHAIN_API_KEY=your_langsmith_api_key_here
 """
             env_file.write_text(template)
             logger.warning("[WARNING] .env file created with template. Please update with your API keys!")
@@ -442,7 +442,7 @@ def main():
     print("""
 ===============================================================================
                     CODE RAG AGENT INITIALIZATION SCRIPT
-                                Version 1.1
+                                Version 1.2
 ===============================================================================
 
   This script will set up your local environment by:
