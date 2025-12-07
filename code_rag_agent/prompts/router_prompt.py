@@ -6,7 +6,7 @@ complex user queries into structured retrieval requests.
 Also provides codebase tree generation utility for router context.
 
 Author: Hay Hoffman
-Version: 1.3
+Version: 1.4
 """
 
 import logging
@@ -41,7 +41,7 @@ CRITICAL RULES:
 - Queries MUST be distinct (no rephrasing the same question)
 - If queries target similar information → unify to single request with multiple filters
 - Combine source_types in single request when possible
-- Use folders/file_patterns only if query is specific
+- ALWAYS infer folders from the codebase tree - use your knowledge of the structure
 - Each request needs clear reasoning (for synthesis context)
 
 FILTERING GUIDELINES:
@@ -52,16 +52,19 @@ FILTERING GUIDELINES:
    - "text": Configuration files (toml, yaml, json, ini)
    - Combine types when both implementation + docs needed
 
-2. Folder Filtering (coarse):
-   - Use when query mentions specific component/module
-   - Example: "retrieval logic" → folders: ["src/retrieval/"]
-   - Leave empty for broad/exploratory queries
+2. Folder Filtering (ALWAYS infer from codebase tree):
+   - ALWAYS try to narrow down to relevant folders based on the codebase structure above
+   - Use folder names that match the query topic (e.g., "Client" → look in httpx/, "transport" → httpx/_transports/)
+   - Example: "HTTPTransport" → folders: ["httpx/_transports/"]
+   - Example: "Client connection" → folders: ["httpx/"]
+   - Only leave empty if query is truly generic (e.g., "list all classes")
 
 3. File Pattern Filtering (fine-grained):
-   - Use when query is very specific
+   - Use when query mentions specific files or patterns
    - Example: "README installation" → file_patterns: ["README.md"]
-   - Use wildcards: ["*_search.py", "test_*.py"]
-   - Leave empty for coarse search
+   - Example: "test files for auth" → file_patterns: ["test_auth*.py"]
+   - Use wildcards: ["*_client.py", "test_*.py"]
+   - Leave empty for folder-level filtering
 
 EXAMPLES:
 
