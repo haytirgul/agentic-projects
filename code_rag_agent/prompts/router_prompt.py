@@ -6,7 +6,7 @@ complex user queries into structured retrieval requests.
 Also provides codebase tree generation utility for router context.
 
 Author: Hay Hoffman
-Version: 1.2
+Version: 1.3
 """
 
 import logging
@@ -85,6 +85,28 @@ GOOD (unified):
     }
   ]
 }
+
+GOOD (multiple distinct queries - truly different topics):
+User: "How does HTTPX implement sync vs async HTTP/2 support?"
+{
+  "retrieval_requests": [
+    {
+      "query": "HTTP/2 sync transport implementation HTTPTransport",
+      "source_types": ["code"],
+      "folders": ["httpx/_transports/"],
+      "file_patterns": [],
+      "reasoning": "Need synchronous HTTP/2 transport implementation details"
+    },
+    {
+      "query": "AsyncHTTPTransport HTTP/2 async implementation",
+      "source_types": ["code"],
+      "folders": ["httpx/_transports/"],
+      "file_patterns": [],
+      "reasoning": "Need async HTTP/2 transport for comparison with sync version"
+    }
+  ]
+}
+// ✅ Valid: These are distinct code paths (sync vs async) requiring separate retrievals
 
 OUTPUT FORMAT (JSON):
 {
