@@ -72,3 +72,15 @@ Thumbs.db
 
 # Temporary files
 nul
+
+# mypy cache
+.mypy_cache/
+
+# Ruff cache
+.ruff_cache/
+
+# Model cache (downloaded models)
+models_cache/
+
+# Init log
+init_project.log

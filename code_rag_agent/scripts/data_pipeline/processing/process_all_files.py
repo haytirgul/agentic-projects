@@ -17,7 +17,7 @@ from typing import Any
 from settings import ALL_CHUNKS_FILE, DATA_DIR
 
 # Setup project paths and imports
-from utils import setup_project_paths
+from .utils import setup_project_paths
 
 # Initialize project and logging
 project_root = setup_project_paths()
@@ -49,11 +49,11 @@ def run_processor(script_name: str, description: str) -> bool:
             text=True,
             check=True
         )
-        logger.info(f"✅ {description} processor completed")
+        logger.info(f"[SUCCESS] {description} processor completed")
         return True
 
     except subprocess.CalledProcessError as e:
-        logger.error(f"❌ {description} processor failed: {e.stderr}")
+        logger.error(f"[ERROR] {description} processor failed: {e.stderr}")
         return False
 
 
@@ -93,8 +93,12 @@ def combine_chunks() -> list[dict[str, Any]]:
     return all_chunks
 
 
-def main():
-    """Main entry point."""
+def main() -> int:
+    """Main entry point.
+
+    Returns:
+        0 on success, 1 on failure
+    """
     logger.info("Starting unified file processing pipeline...")
 
     # Run all processors
@@ -107,7 +111,7 @@ def main():
 
     if success_count == 0:
         logger.error("No processors completed successfully")
-        sys.exit(1)
+        return 1
 
     logger.info(f"Completed {success_count}/{len(PROCESSORS)} processors")
 
@@ -117,7 +121,7 @@ def main():
 
     if not all_chunks:
         logger.error("No chunks found to combine")
-        sys.exit(1)
+        return 1
 
     logger.info(f"Total combined chunks: {len(all_chunks)}")
 
@@ -126,7 +130,7 @@ def main():
     with open(ALL_CHUNKS_FILE, 'w', encoding='utf-8') as f:
         json.dump(all_chunks, f, indent=2, ensure_ascii=False)
 
-    logger.info(f"✅ Saved combined dataset to {ALL_CHUNKS_FILE}")
+    logger.info(f"[SUCCESS] Saved combined dataset to {ALL_CHUNKS_FILE}")
 
     # Statistics
     chunk_types = {}
@@ -152,8 +156,9 @@ def main():
     for ext, count in sorted(file_types.items()):
         logger.info(f"  {ext}: {count}")
 
-    logger.info("🎉 File processing pipeline completed successfully!")
+    logger.info("[COMPLETE] File processing pipeline completed successfully!")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

@@ -2,215 +2,124 @@
 
 This module contains routing logic that determines which node to execute next
 based on the current state of the graph.
+
+Architecture Version: 1.2
+Author: Hay Hoffman
 """
 
 import logging
-from .state import AgentState
-from src.llm.workers import has_pending_tool_calls
+from src.agent.state import AgentState
 
 __all__ = [
     "route_after_security_gateway",
-    "route_after_preprocessing",
-    "route_after_intent_classification",
-    "route_after_agent",
-    "route_after_prompt_continue",
+    "route_after_input_preprocessor",
+    "route_after_conversation_memory",
 ]
 
 logger = logging.getLogger(__name__)
 
 
 def route_after_security_gateway(state: AgentState) -> str:
-    """
-    Route after security gateway: end conversation for blocked requests or continue to intent classification.
-
-    This routing function checks if the security gateway blocked the request due to malicious content.
-    If blocked, immediately end the conversation. Otherwise, continue to intent classification
-    (which now includes preprocessing internally).
+    """Route after security gateway: end for blocked or continue to preprocessor.
 
     Args:
-        state: Current graph state with gateway_passed flag
+        state: Current graph state with gateway_passed and is_blocked flags
 
     Returns:
-        "END" if security gateway blocked the request,
-        "intent_classification" otherwise
-
-    Example:
-        >>> state = {"gateway_passed": False, "gateway_reason": "Malicious content detected"}
-        >>> route_after_security_gateway(state)
-        "END"
-
-        >>> state = {"gateway_passed": True}
-        >>> route_after_security_gateway(state)
-        "intent_classification"
+        "END" if blocked, "input_preprocessor" otherwise
     """
     gateway_passed = state.get("gateway_passed", True)
+    is_blocked = state.get("is_blocked", False)
 
-    if not gateway_passed:
+    if not gateway_passed or is_blocked:
         gateway_reason = state.get("gateway_reason", "Security violation")
-        logger.warning(f"Security gateway blocked request, ending conversation: {gateway_reason}")
+        logger.warning(f"Security gateway blocked: {gateway_reason}")
         return "END"
-    else:
-        logger.debug("Security gateway passed, continuing to intent_classification")
-        return "intent_classification"
+
+    logger.debug("Security passed, continuing to input_preprocessor")
+    return "input_preprocessor"
 
 
-def route_after_preprocessing(state: AgentState) -> str:
-    """
-    Route after preprocessing: end conversation for malicious requests or continue to intent classification.
+def route_after_input_preprocessor(state: AgentState) -> str:
+    """Route after input preprocessor based on retrieval needs.
 
-    This routing function checks if the preprocessing node detected suspicious patterns
-    that indicate malicious intent. If suspicious patterns are found with high risk,
-    immediately end the conversation. Otherwise, continue to intent classification.
-
-    Args:
-        state: Current graph state (may contain security analysis from preprocessing)
-
-    Returns:
-        "END" if preprocessing detected high-risk malicious patterns,
-        "intent_classification" otherwise
-
-    Example:
-        >>> state = {"security_analysis": {"risk_level": "high", "suspicious_patterns": ["data_exfiltration"]}}
-        >>> route_after_preprocessing(state)
-        "END"
-
-        >>> state = {"security_analysis": {"risk_level": "low", "suspicious_patterns": []}}
-        >>> route_after_preprocessing(state)
-        "intent_classification"
-    """
-    # Check if preprocessing detected suspicious patterns
-    # The security analysis might be in different state keys depending on implementation
-    security_analysis = None
-
-    # Check various possible locations for security analysis
-    if "security_analysis" in state:
-        security_analysis = state["security_analysis"]
-    elif "extracted_data" in state and isinstance(state["extracted_data"], dict) and "security_analysis" in state["extracted_data"]:
-        security_analysis = state["extracted_data"]["security_analysis"]
-
-    if security_analysis:
-        risk_level = security_analysis.get("risk_level", "low")
-        suspicious_patterns = security_analysis.get("suspicious_patterns", [])
-
-        if risk_level == "high" or (risk_level == "medium" and len(suspicious_patterns) >= 2):
-            logger.warning(
-                f"Preprocessing detected malicious patterns, ending conversation: "
-                f"risk_level={risk_level}, patterns={suspicious_patterns}"
-            )
-            return "END"
-
-    logger.debug("Preprocessing completed without high-risk patterns, continuing to intent_classification")
-    return "intent_classification"
-
-
-def route_after_intent_classification(state: AgentState) -> str:
-    """
-    Route after intent classification: skip RAG for clarifications or proceed to RAG.
-
-    The intent classification node handles tools internally, so it always returns
-    a complete IntentClassification result. This function determines if RAG retrieval
-    is needed based on that classification.
+    Routing decision:
+    - history_request: Skip to memory (final_answer already set)
+    - out_of_scope: Skip to memory (final_answer already set with rejection message)
+    - general_question: Skip to synthesis (LLM can answer from knowledge)
+    - follow_up (no retrieval): Skip to synthesis (use history context)
+    - follow_up_with_retrieval / new_question: Go to router for fresh retrieval
 
     Args:
-        state: Current graph state with intent_result
+        state: Current graph state with is_history_query, is_out_of_scope, is_general_question, needs_retrieval flags
 
     Returns:
-        "prepare_messages" if RAG should be skipped (clarification),
-        "hybrid_retrieval" otherwise
+        "conversation_memory" if history query or out_of_scope (final_answer set),
+        "synthesis" if general question or follow_up with sufficient history (needs_retrieval=False),
+        "router" otherwise (needs fresh retrieval)
 
     Example:
-        >>> state = {"intent_result": IntentClassification(conversation_context="clarification", requires_rag=False)}
-        >>> route_after_intent_classification(state)
-        "prepare_messages"
+        >>> state = {"is_history_query": True}
+        >>> route_after_input_preprocessor(state)
+        "conversation_memory"
 
-        >>> state = {"intent_result": IntentClassification(conversation_context="new_topic", requires_rag=True)}
-        >>> route_after_intent_classification(state)
-        "hybrid_retrieval"
+        >>> state = {"is_out_of_scope": True}
+        >>> route_after_input_preprocessor(state)
+        "conversation_memory"
+
+        >>> state = {"is_general_question": True, "needs_retrieval": False}
+        >>> route_after_input_preprocessor(state)
+        "synthesis"
+
+        >>> state = {"is_follow_up": True, "needs_retrieval": False}
+        >>> route_after_input_preprocessor(state)
+        "synthesis"
+
+        >>> state = {"needs_retrieval": True}
+        >>> route_after_input_preprocessor(state)
+        "router"
     """
-    intent_result = state.get("intent_result")
+    is_history_query = state.get("is_history_query", False)
+    is_out_of_scope = state.get("is_out_of_scope", False)
+    is_general_question = state.get("is_general_question", False)
+    needs_retrieval = state.get("needs_retrieval", True)
 
-    if not intent_result:
-        logger.warning("No intent result found, defaulting to RAG retrieval")
-        return "hybrid_retrieval"
+    if is_history_query:
+        logger.info("History query detected - skipping to conversation_memory")
+        return "conversation_memory"
 
-    # Check if RAG is required
-    requires_rag = getattr(intent_result, "requires_rag", True)
-    conversation_context = getattr(intent_result, "conversation_context", "new_topic")
+    if is_out_of_scope:
+        logger.info("Out of scope query (non-HTTPX code) - skipping to conversation_memory")
+        return "conversation_memory"
 
-    if not requires_rag and conversation_context == "clarification":
-        logger.info(
-            f"Skipping RAG retrieval for clarification (conversation_context={conversation_context})"
-        )
-        return "prepare_messages"
-    else:
-        logger.info(
-            f"Proceeding to RAG retrieval (requires_rag={requires_rag}, "
-            f"conversation_context={conversation_context})"
-        )
-        return "hybrid_retrieval"
+    if is_general_question:
+        logger.info("General question detected - skipping to synthesis (no retrieval needed)")
+        return "synthesis"
 
+    if not needs_retrieval:
+        # Follow-up that can be answered from history context
+        logger.info("Follow-up detected (history sufficient) - skipping to synthesis")
+        return "synthesis"
 
-def route_after_agent(state: AgentState) -> str:
-    """
-    Route after agent node: continue with tools or finalize.
-
-    This routing function determines if the response agent needs to call tools
-    (e.g., ask_user for clarification) or if it's ready to finalize the response.
-
-    Args:
-        state: Current graph state with messages
-
-    Returns:
-        "tools" if there are pending tool calls,
-        "finalize" otherwise
-
-    Example:
-        >>> state = {"messages": [AIMessage(content="...", tool_calls=[...])]}
-        >>> route_after_agent(state)
-        "tools"
-
-        >>> state = {"messages": [AIMessage(content="...")]}
-        >>> route_after_agent(state)
-        "finalize"
-    """
-    messages = state.get("messages", [])
-
-    if has_pending_tool_calls(messages):
-        logger.debug("Agent has pending tool calls, routing to tools")
-        return "tools"
-
-    logger.debug("No pending tool calls, routing to finalize")
-    return "finalize"
+    logger.debug("Retrieval needed - continuing to router")
+    return "router"
 
 
-def route_after_prompt_continue(state: AgentState) -> str:
-    """
-    Route after prompt_continue node: restart conversation or end.
-
-    This routing function determines if the conversation should continue
-    with a new query or end.
+def route_after_conversation_memory(state: AgentState) -> str:
+    """Route after conversation_memory: restart or end.
 
     Args:
         state: Current graph state with continue_conversation flag
 
     Returns:
-        "reset_for_next_turn" if conversation continues,
+        "security_gateway" if continuing (new query needs validation),
         "END" otherwise
-
-    Example:
-        >>> state = {"continue_conversation": True}
-        >>> route_after_prompt_continue(state)
-        "reset_for_next_turn"
-
-        >>> state = {"continue_conversation": False}
-        >>> route_after_prompt_continue(state)
-        "END"
     """
     continue_conv = state.get("continue_conversation", False)
 
     if continue_conv:
-        logger.debug("Continuing conversation, routing to reset state")
-        return "reset_for_next_turn"
-    else:
-        logger.debug("Ending conversation")
-        return "END"
+        logger.debug("Continuing conversation, routing to security_gateway")
+        return "security_gateway"
+
+    logger.debug("Ending conversation")
+    return "END"

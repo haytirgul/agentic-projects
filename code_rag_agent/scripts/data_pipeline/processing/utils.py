@@ -8,7 +8,7 @@ import json
 import logging
 import sys
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import Any, list
 
 __all__ = [
     "setup_project_paths",
@@ -49,13 +49,13 @@ def setup_project_paths() -> Path:
 # FILE FILTERING AND EXCLUSION
 # ============================================================================
 
-def should_exclude(file_path: Path, repo_root: Path, exclude_patterns: List[str]) -> bool:
+def should_exclude(file_path: Path, repo_root: Path, exclude_patterns: list[str]) -> bool:
     """Check if file should be excluded based on patterns.
 
     Args:
         file_path: Path to the file
         repo_root: Root of the repository
-        exclude_patterns: List of patterns to exclude
+        exclude_patterns: list of patterns to exclude
 
     Returns:
         True if file should be excluded
@@ -119,7 +119,7 @@ def calculate_chunk_size(content: str, max_size: int = 2000) -> int:
 # FILE OPERATIONS
 # ============================================================================
 
-def safe_read_file(file_path: Path, encoding: str = 'utf-8') -> Optional[str]:
+def safe_read_file(file_path: Path, encoding: str = 'utf-8') -> str | None:
     """Safely read a file with error handling.
 
     Args:
@@ -130,12 +130,12 @@ def safe_read_file(file_path: Path, encoding: str = 'utf-8') -> Optional[str]:
         File content or None if error
     """
     try:
-        with open(file_path, 'r', encoding=encoding) as f:
+        with open(file_path, encoding=encoding) as f:
             return f.read()
     except UnicodeDecodeError:
         # Try with different encoding or return None
         try:
-            with open(file_path, 'r', encoding='latin-1') as f:
+            with open(file_path, encoding='latin-1') as f:
                 return f.read()
         except Exception:
             return None
@@ -143,11 +143,11 @@ def safe_read_file(file_path: Path, encoding: str = 'utf-8') -> Optional[str]:
         return None
 
 
-def save_json_chunks(chunks: List[Dict[str, Any]], output_file: Path) -> bool:
+def save_json_chunks(chunks: list[dict[str, Any]], output_file: Path) -> bool:
     """Save chunks to JSON file with error handling.
 
     Args:
-        chunks: List of chunk dictionaries
+        chunks: list of chunk dictionaries
         output_file: Output file path
 
     Returns:
@@ -187,7 +187,7 @@ def create_chunk_id(file_path: Path, start_line: int, content_preview: str, max_
     return content_hash[:max_length]
 
 
-def validate_chunk(chunk: Dict[str, Any]) -> bool:
+def validate_chunk(chunk: dict[str, Any]) -> bool:
     """Validate chunk structure.
 
     Args:
@@ -204,11 +204,11 @@ def validate_chunk(chunk: Dict[str, Any]) -> bool:
 # STATISTICS AND REPORTING
 # ============================================================================
 
-def generate_processing_stats(chunks: List[Dict[str, Any]]) -> Dict[str, Any]:
+def generate_processing_stats(chunks: list[dict[str, Any]]) -> dict[str, Any]:
     """Generate comprehensive statistics about processed chunks.
 
     Args:
-        chunks: List of chunk dictionaries
+        chunks: list of chunk dictionaries
 
     Returns:
         Dictionary with statistics
@@ -216,8 +216,8 @@ def generate_processing_stats(chunks: List[Dict[str, Any]]) -> Dict[str, Any]:
     if not chunks:
         return {}
 
-    chunk_types: Dict[str, int] = {}
-    file_types: Dict[str, int] = {}
+    chunk_types: dict[str, int] = {}
+    file_types: dict[str, int] = {}
 
     # Chunk types
     for chunk in chunks:
@@ -262,7 +262,7 @@ def generate_processing_stats(chunks: List[Dict[str, Any]]) -> Dict[str, Any]:
     return stats
 
 
-def print_processing_stats(stats: Dict[str, Any], logger: Optional[logging.Logger] = None):
+def print_processing_stats(stats: dict[str, Any], logger: logging.Logger | None = None):
     """Print formatted processing statistics.
 
     Args:

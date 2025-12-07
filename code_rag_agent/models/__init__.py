@@ -3,21 +3,29 @@
 This package contains all Pydantic models used throughout the application.
 """
 
-from models.conversation import ConversationMemory, ConversationTurn
-from models.router import QueryAnalysis, RetrievalStrategy, RouterDecision
-from models.retrieval import RetrievalRequest, RetrievedChunk, RetrievalResult, RetrievalMetadata
-from models.synthesis import SynthesisRequest, Citation, SynthesizedAnswer, SynthesisMetadata
+from .conversation import ConversationMemory, ConversationTurn
+from .intent import IntentType, QueryIntent
+from .retrieval import (
+    ExpandedChunk,
+    RetrievalRequest,
+    RetrievedChunk,
+    RouterOutput,
+)
+from .synthesis import Citation, SynthesisMetadata, SynthesisRequest, SynthesizedAnswer
 
 __all__ = [
+    # Conversation
     "ConversationMemory",
     "ConversationTurn",
-    "QueryAnalysis",
-    "RetrievalStrategy",
-    "RouterDecision",
+    # Intent classification
+    "IntentType",
+    "QueryIntent",
+    # Router & Retrieval
+    "RouterOutput",
     "RetrievalRequest",
     "RetrievedChunk",
-    "RetrievalResult",
-    "RetrievalMetadata",
+    "ExpandedChunk",
+    # Synthesis
     "SynthesisRequest",
     "Citation",
     "SynthesizedAnswer",

@@ -5,7 +5,7 @@ for multi-turn code analysis conversations.
 """
 
 from datetime import datetime
-from typing import List
+
 from pydantic import BaseModel, Field
 
 __all__ = ["ConversationTurn", "ConversationMemory"]
@@ -19,7 +19,7 @@ class ConversationTurn(BaseModel):
 
     user_query: str = Field(..., description="User's question about the codebase")
     assistant_response: str = Field(..., description="Agent's answer with citations")
-    citations: List[str] = Field(
+    citations: list[str] = Field(
         default_factory=list,
         description="File:line citations used in response"
     )
@@ -32,7 +32,7 @@ class ConversationTurn(BaseModel):
         ge=0,
         description="Number of code chunks retrieved for this turn"
     )
-    retrieval_queries: List[str] = Field(
+    retrieval_queries: list[str] = Field(
         default_factory=list,
         description="Queries used to retrieve code chunks"
     )
@@ -51,7 +51,7 @@ class ConversationMemory(BaseModel):
     multi-turn code analysis sessions.
     """
 
-    turns: List[ConversationTurn] = Field(
+    turns: list[ConversationTurn] = Field(
         default_factory=list,
         description="Conversation history in chronological order"
     )
@@ -107,14 +107,14 @@ class ConversationMemory(BaseModel):
 
         return "\n".join(context_parts)
 
-    def get_last_n_turns(self, n: int = 3) -> List[ConversationTurn]:
+    def get_last_n_turns(self, n: int = 3) -> list[ConversationTurn]:
         """Get the last N conversation turns.
 
         Args:
             n: Number of recent turns to retrieve
 
         Returns:
-            List of the most recent N turns
+            list of the most recent N turns
         """
         return self.turns[-n:] if self.turns else []
 

@@ -284,7 +284,7 @@ All data models are implemented as Pydantic models in the `models/` directory wi
 ```python
 # models/chunk.py
 from pathlib import Path
-from typing import List, Optional
+from typing import list, Optional
 from pydantic import BaseModel, Field, validator
 
 class CodeChunk(BaseModel):
@@ -300,8 +300,8 @@ class CodeChunk(BaseModel):
     chunk_type: str = Field(..., regex="^(function|class|window)$", description="Type of chunk")
     parent_context: str = Field("", description="Class/module name context")
     docstring: Optional[str] = Field(None, description="Extracted docstring")
-    imports: List[str] = Field(default_factory=list, description="Relevant imports")
-    embedding: List[float] = Field(default_factory=list, description="Vector representation")
+    imports: list[str] = Field(default_factory=list, description="Relevant imports")
+    embedding: list[float] = Field(default_factory=list, description="Vector representation")
 
     @validator('end_line')
     def end_line_must_be_after_start(cls, v, values):
@@ -314,7 +314,7 @@ class CodeChunk(BaseModel):
 
 # models/retrieval.py
 from datetime import datetime
-from typing import List
+from typing import list
 from pydantic import BaseModel, Field
 from .chunk import CodeChunk
 
@@ -324,11 +324,11 @@ class RetrievalResult(BaseModel):
     Contains the results of a retrieval operation including chunks,
     similarity scores, and reranking information.
     """
-    chunks: List[CodeChunk] = Field(default_factory=list, description="Retrieved code chunks")
+    chunks: list[CodeChunk] = Field(default_factory=list, description="Retrieved code chunks")
     query: str = Field(..., description="Original search query")
-    dense_scores: List[float] = Field(default_factory=list, description="Dense retrieval similarity scores")
-    sparse_scores: List[float] = Field(default_factory=list, description="Sparse retrieval similarity scores")
-    reranked_scores: List[float] = Field(default_factory=list, description="Reranked similarity scores")
+    dense_scores: list[float] = Field(default_factory=list, description="Dense retrieval similarity scores")
+    sparse_scores: list[float] = Field(default_factory=list, description="Sparse retrieval similarity scores")
+    reranked_scores: list[float] = Field(default_factory=list, description="Reranked similarity scores")
     timestamp: datetime = Field(default_factory=datetime.utcnow, description="Retrieval timestamp")
 
 # models/conversation.py
@@ -343,7 +343,7 @@ class ConversationTurn(BaseModel):
     """
     user_query: str = Field(..., description="User's question")
     assistant_response: str = Field(..., description="Agent's answer")
-    citations: List[str] = Field(default_factory=list, description="Citations used in response")
+    citations: list[str] = Field(default_factory=list, description="Citations used in response")
     timestamp: datetime = Field(default_factory=datetime.utcnow, description="Turn timestamp")
     chunks_retrieved: int = Field(0, description="Number of chunks retrieved")
 
@@ -352,7 +352,7 @@ class ConversationMemory(BaseModel):
 
     Maintains conversation history with configurable window size.
     """
-    turns: List[ConversationTurn] = Field(default_factory=list, description="Conversation history")
+    turns: list[ConversationTurn] = Field(default_factory=list, description="Conversation history")
     max_turns: int = Field(5, description="Maximum turns to keep in memory")
     session_id: str = Field(..., description="Unique session identifier")
     started_at: datetime = Field(default_factory=datetime.utcnow, description="Session start time")
@@ -372,7 +372,7 @@ class ConversationMemory(BaseModel):
         ])
 
 # models/agent.py
-from typing import List, Optional
+from typing import list, Optional
 from pydantic import BaseModel, Field
 from .chunk import CodeChunk
 from .retrieval import RetrievalResult
@@ -384,10 +384,10 @@ class AgentState(BaseModel):
     Maintains the state of the agent throughout the retrieval and synthesis process.
     """
     user_query: str = Field(..., description="Original user question")
-    retrieval_history: List[RetrievalResult] = Field(default_factory=list, description="History of retrieval operations")
-    current_chunks: List[CodeChunk] = Field(default_factory=list, description="Currently retrieved chunks")
+    retrieval_history: list[RetrievalResult] = Field(default_factory=list, description="History of retrieval operations")
+    current_chunks: list[CodeChunk] = Field(default_factory=list, description="Currently retrieved chunks")
     answer: Optional[str] = Field(None, description="Generated answer")
-    citations: List[str] = Field(default_factory=list, description="File:line citations")
+    citations: list[str] = Field(default_factory=list, description="File:line citations")
     should_continue: bool = Field(True, description="Whether to continue retrieval")
     conversation_memory: Optional[ConversationMemory] = Field(None, description="Conversation history")
     is_followup: bool = Field(False, description="Whether this is a follow-up question")
@@ -471,7 +471,7 @@ Citations:
 **Expected Flow**:
 1. Router: Location query → search for "proxy"
 2. Retriever: Find proxy-related classes/functions
-3. Synthesizer: List locations with brief description
+3. Synthesizer: list locations with brief description
 
 ### Query 3: "What happens if a request exceeds the configured timeout?"
 **Expected Flow**:
@@ -582,7 +582,7 @@ that can be imported throughout the project.
 
 import os
 from pathlib import Path
-from typing import List, Optional
+from typing import list, Optional
 
 from dotenv import load_dotenv
 
@@ -651,7 +651,7 @@ INDEX_DIR = DATA_DIR / "index"
 # ============================================================================
 
 # Patterns to exclude from indexing
-REPO_EXCLUDE_PATTERNS: List[str] = [
+REPO_EXCLUDE_PATTERNS: list[str] = [
     "tests/*",
     "docs/*",
     "*.md",

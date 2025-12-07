@@ -7,7 +7,6 @@ scripts to ensure they comply with PRD requirements.
 import ast
 import sys
 from pathlib import Path
-from typing import Any
 
 import pytest
 
@@ -68,7 +67,7 @@ def my_function():
 
 class MyClass:
     def method(self):
-        from typing import List  # This should NOT be included
+        from typing import list  # This should NOT be included
         return []
 """
         tree = ast.parse(code)
@@ -80,7 +79,7 @@ class MyClass:
         assert "import sys" in imports
         assert "from pathlib import Path" in imports
         assert "import json" not in imports  # Nested import excluded
-        assert "from typing import List" not in imports  # Nested import excluded
+        assert "from typing import list" not in imports  # Nested import excluded
 
     def test_get_file_imports_after_large_docstring(self):
         """Test import extraction when imports appear after large docstring (PRD AC-4)."""

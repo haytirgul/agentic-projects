@@ -8,12 +8,10 @@ It serves as the single source of truth for LLM configuration.
 from __future__ import annotations
 
 import logging
-from typing import Dict, Optional
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from langchain_core.language_models import BaseChatModel
 from langchain_google_genai import ChatGoogleGenerativeAI
-from concurrent.futures import ThreadPoolExecutor, as_completed
-
 from settings import (
     GOOGLE_API_KEY,
     LLM_MAX_RETRIES,
@@ -22,9 +20,9 @@ from settings import (
     LLM_TIMEOUT,
     LLM_TOP_K,
     LLM_TOP_P,
-    MODEL_FAST, 
-    MODEL_INTERMEDIATE, 
-    MODEL_SLOW  
+    MODEL_FAST,
+    MODEL_INTERMEDIATE,
+    MODEL_SLOW,
 )
 
 __all__ = ["create_llm_with_config", "get_cached_llm", "initialize_llm_cache"]
@@ -33,7 +31,7 @@ logger = logging.getLogger(__name__)
 
 # LLM Cache System
 # Global cache for LLM instances to avoid recreation on every iteration
-_LLM_CACHE: Dict[str, BaseChatModel] = {}
+_LLM_CACHE: dict[str, BaseChatModel] = {}
 
 
 def get_cached_llm(model: str) -> BaseChatModel:
@@ -57,20 +55,25 @@ def get_cached_llm(model: str) -> BaseChatModel:
 
 def initialize_llm_cache() -> None:
     """
-    Pre-create and cache the 3 model level instances used in the graph.
+    Pre-create and cache all model instances used in the graph.
     Call this once during graph initialization.
+
+    Caches:
+    - MODEL_FAST (gemini-2.5-flash-lite) - for routing
+    - MODEL_INTERMEDIATE (gemini-2.5-flash) - for synthesis
+    - MODEL_SLOW (gemini-2.5-pro) - for complex tasks
     """
-    
 
     def _cache_model(model: str) -> None:
         """Cache a single model with default settings."""
-        _LLM_CACHE[model] = create_llm_with_config(model=model)
-        logger.info(f"Created and cached LLM: {model}")
+        if model not in _LLM_CACHE:
+            _LLM_CACHE[model] = create_llm_with_config(model=model)
+            logger.info(f"Created and cached LLM: {model}")
 
     logger.info("Initializing LLM cache...")
 
-    # Models to cache
-    models_to_cache = [MODEL_FAST, MODEL_INTERMEDIATE, MODEL_SLOW]
+    # Models to cache (deduplicate in case of overlap)
+    models_to_cache = list(set([MODEL_FAST, MODEL_INTERMEDIATE, MODEL_SLOW]))
 
     # Cache models in parallel
     with ThreadPoolExecutor(max_workers=len(models_to_cache)) as executor:
@@ -80,14 +83,14 @@ def initialize_llm_cache() -> None:
         for future in as_completed(futures):
             future.result()  # Raise any exceptions
 
-    print(f"LLM cache initialized with {len(_LLM_CACHE)} model instances")
+    logger.info(f"LLM cache initialized with {len(_LLM_CACHE)} model instances")
 
 
 
 def create_llm_with_config(
     model: str,
     temperature: float = LLM_TEMPERATURE,
-    max_tokens: Optional[int] = LLM_MAX_TOKENS,
+    max_tokens: int | None = LLM_MAX_TOKENS,
     top_p: float = LLM_TOP_P,
     top_k: int = LLM_TOP_K,
     timeout: int = LLM_TIMEOUT,

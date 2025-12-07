@@ -15,27 +15,26 @@ from typing import Any
 
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-__all__: list[str] = []
+# Setup project paths first - must be done before importing from models/settings
+from utils import setup_project_paths
 
-# Setup project paths first - must be done before importing from settings
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+project_root = setup_project_paths()
 
+from models.chunk import CodeChunk
+from settings import CODE_CHUNKS_FILE, HTTPX_REPO_DIR, REPO_EXCLUDE_PATTERNS
 from utils import (
     create_chunk_id,
     estimate_token_count,
     generate_processing_stats,
     print_processing_stats,
     save_json_chunks,
-    setup_project_paths,
     should_exclude,
 )
 
-# Initialize project and logging
-project_root = setup_project_paths()
-logger = logging.getLogger(__name__)
+__all__: list[str] = []
 
-from models.chunk import CodeChunk
-from settings import CODE_CHUNKS_FILE, HTTPX_REPO_DIR, REPO_EXCLUDE_PATTERNS
+# Initialize logging
+logger = logging.getLogger(__name__)
 
 # Constants
 MAX_TOKENS = 1000  # Token limit for chunks
@@ -65,7 +64,7 @@ def get_file_imports(tree: ast.Module) -> list[str]:
         tree: AST module tree
 
     Returns:
-        List of import statement strings
+        list of import statement strings
     """
     imports = []
 
@@ -93,7 +92,7 @@ def split_large_chunk(chunk: dict[str, Any]) -> list[dict[str, Any]]:
         chunk: Original chunk dictionary
 
     Returns:
-        List of smaller chunk dictionaries with preserved metadata
+        list of smaller chunk dictionaries with preserved metadata
     """
     content = chunk["content"]
 
@@ -235,7 +234,7 @@ def chunk_class(
         tree: AST module tree for import extraction
 
     Returns:
-        List of chunk dictionaries
+        list of chunk dictionaries
     """
     chunks = []
     start_line = class_node.lineno
@@ -348,7 +347,7 @@ def process_file(file_path: Path) -> list[dict[str, Any]]:
         file_path: Path to Python file
 
     Returns:
-        List of chunk dictionaries
+        list of chunk dictionaries
     """
     chunks = []
 
@@ -405,9 +404,9 @@ def main():
 
     # Save chunks to JSON using utility function
     if save_json_chunks(all_chunks, CODE_CHUNKS_FILE):
-        logger.info(f"✅ Saved chunks to {CODE_CHUNKS_FILE}")
+        logger.info(f"[SUCCESS] Saved chunks to {CODE_CHUNKS_FILE}")
     else:
-        logger.error("❌ Failed to save chunks")
+        logger.error("[ERROR] Failed to save chunks")
         return
 
     # Generate and print statistics using utility functions

@@ -19,6 +19,12 @@ from langchain_text_splitters import (
     RecursiveCharacterTextSplitter,
 )
 
+# Setup project paths first - must be done before importing from settings/models
+from utils import setup_project_paths
+
+project_root = setup_project_paths()
+
+from models.chunk import MarkdownChunk
 from settings import (
     CHUNK_OVERLAP_MARKDOWN,
     HTTPX_REPO_DIR,
@@ -26,8 +32,6 @@ from settings import (
     MAX_CHUNK_SIZE_MARKDOWN,
     REPO_EXCLUDE_PATTERNS,
 )
-
-# Setup project paths first
 from utils import (
     create_chunk_id,
     estimate_token_count,
@@ -35,13 +39,8 @@ from utils import (
     print_processing_stats,
     safe_read_file,
     save_json_chunks,
-    setup_project_paths,
     should_exclude,
 )
-
-project_root = setup_project_paths()
-
-from models.chunk import MarkdownChunk
 
 logger = logging.getLogger(__name__)
 
@@ -98,7 +97,7 @@ class StructureAwareMarkdownSplitter:
             metadata: Optional metadata to attach to chunks
 
         Returns:
-            List of chunk dictionaries in PRD-specified format
+            list of chunk dictionaries in PRD-specified format
         """
         # Store original lines for line number tracking
         original_lines = text.split('\n')
@@ -144,7 +143,7 @@ class StructureAwareMarkdownSplitter:
             original_lines: Original file lines for line number tracking
 
         Returns:
-            List of sections with line number information
+            list of sections with line number information
         """
 
         # PRD requirement: Use MarkdownHeaderTextSplitter as the base
@@ -383,15 +382,19 @@ def process_markdown_file(file_path: Path) -> list[dict[str, Any]]:
         return []
 
 
-def main():
-    """Main entry point."""
+def main() -> int:
+    """Main entry point.
+
+    Returns:
+        0 on success, 1 on failure
+    """
     logger.info("Starting structure-aware markdown processing...")
     logger.info(f"Configuration: MAX_CHUNK_SIZE_MARKDOWN={MAX_CHUNK_SIZE_MARKDOWN}, CHUNK_OVERLAP_MARKDOWN={CHUNK_OVERLAP_MARKDOWN}")
 
     if not HTTPX_REPO_DIR.exists():
         logger.error(f"Repository not found at {HTTPX_REPO_DIR}")
         logger.error("Run clone_httpx_repo.py first")
-        sys.exit(1)
+        return 1
 
     # Find all markdown files
     markdown_files = list(HTTPX_REPO_DIR.rglob("*.md"))
@@ -421,15 +424,17 @@ def main():
 
     # Save chunks to JSON using utils function
     if save_json_chunks(all_chunks, MARKDOWN_CHUNKS_FILE):
-        logger.info(f"✅ Saved chunks to {MARKDOWN_CHUNKS_FILE}")
+        logger.info(f"[SUCCESS] Saved chunks to {MARKDOWN_CHUNKS_FILE}")
     else:
-        logger.error("❌ Failed to save chunks")
-        return
+        logger.error("[ERROR] Failed to save chunks")
+        return 1
 
     # Generate and print statistics using utils functions
     stats = generate_processing_stats(all_chunks)
     print_processing_stats(stats, logger)
 
+    return 0
+
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

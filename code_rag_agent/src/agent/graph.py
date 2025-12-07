@@ -1,213 +1,186 @@
-"""
-Graph builder for the LangGraph Documentation Assistant.
+"""LangGraph builder for the Code RAG Agent (v1.2).
 
-This module constructs the agent graph with security gateway, hybrid RAG retrieval, and conversation memory.
+This module constructs the agent graph with:
+- Security gateway (prompt injection detection)
+- Input preprocessor (query cleaning, history detection)
+- Router (query decomposition with fast path optimization)
+- Hybrid retrieval (weighted RRF with code-aware BM25 + context expansion)
+- Synthesis (streaming answer generation with citations)
+- Conversation memory (follow-up question support)
 
-Graph flow:
-    START -> security_gateway -> [SECURITY CHECK]
-          -> END (if malicious content detected)
-          -> preprocessing -> [SECURITY ANALYSIS]
-               -> END (if suspicious patterns detected)
-               -> intent_classification_agent -> intent_classification_tools (loop)
-          -> intent_classification_finalize -> [conditional routing]
-               -> hybrid_retrieval (if requires_rag=True) -> prepare_messages
-               -> prepare_messages (if clarification, skip RAG)
-          -> agent <-> tools (loop) -> finalize -> save_turn -> prompt_continue
-          -> reset_for_next_turn -> preprocessing (conversation loop) OR END
+Graph Flow:
+    START → security_gateway → [SECURITY CHECK]
+          → END (if blocked)
+          → input_preprocessor → [HISTORY CHECK]
+          → conversation_memory (if history query)
+          → router → retrieval → synthesis → conversation_memory
+          → security_gateway (loop) OR END
 
-Key design decisions:
-- Security gateway: ML-based prompt injection detection using ProtectAI DeBERTa v3 (first node)
-- Tool-enabled intent classification: Classification can use ask_user for clarification during analysis
-- Conversation context detection: Detects new_topic, continuing_topic, clarification, follow_up
-- Conditional RAG: Clarifications skip RAG retrieval and use conversation history instead
-- Hybrid RAG: BM25 + embeddings + fuzzy matching for document retrieval
-- Conversation memory: Stores query-response pairs with intent/retrieval metadata
-- History-aware responses: Agent receives conversation history for context-aware answers
-- Continuous conversation: After each response, loops back with preserved history
-- Clean separation: Intent classification handles clarification, agent handles response generation
+Architecture Version: 1.2
+Author: Hay Hoffman
 """
 
 from __future__ import annotations
 
 import logging
 from functools import partial
-from typing import Any, Optional
+from pathlib import Path
+from typing import Any
 
-# Only import lightweight dependencies at module level
-from settings import LEVEL_TO_MODEL
-
-# Defer heavy imports (LangChain, nodes, etc.) to function level
+from settings import (
+    HTTPX_REPO_DIR,
+    ROUTER_MODEL,
+    SYNTHESIS_MODEL,
+)
 
 __all__ = [
-    "build_agent_graph",
+    "build_code_rag_graph",
     "get_compiled_graph",
 ]
 
 logger = logging.getLogger(__name__)
 
-# Model configuration constants
-AGENT_MODEL_LEVEL = "intermediate"  # Use slow model for high-quality responses
-AGENT_TEMPERATURE = 0.3
-AGENT_MAX_TOKENS = 8192
 
-
-def build_agent_graph():
-    """
-    Build the documentation assistant graph with security gateway and hybrid RAG retrieval.
+def build_code_rag_graph() -> Any:
+    """Build the Code RAG Agent graph with v1.2 architecture.
 
     Graph structure:
     ```
-    START -> security_gateway -> [SECURITY CHECK]
-          -> END (if malicious content blocked)
-          -> intent_classification (includes preprocessing) -> [conditional routing]
-               -> hybrid_retrieval (if requires_rag=True) -> prepare_messages
-               -> prepare_messages (if clarification, skip RAG)
-          -> agent -> finalize -> user_output -> save_turn -> prompt_continue
-          -> reset_for_next_turn -> intent_classification (conversation loop) OR END
+    START → security_gateway → [SECURITY CHECK]
+          → END (if blocked)
+          → input_preprocessor → [HISTORY CHECK]
+          → conversation_memory (if history query, skip retrieval)
+          → router → retrieval → synthesis → conversation_memory
+          → security_gateway (loop) OR END
     ```
 
-    Flow:
-    1. security_gateway: ML-based prompt injection detection
-       - If SAFE: continue to intent_classification
-       - If MALICIOUS: immediately END conversation (security violation)
-    2. intent_classification: Parse user input + classify intent (merged node)
-       - Parses and cleans request, extracts code snippets
-       - Performs security analysis
-       - Classifies intent with structured output
-    3. [Conditional routing]: Check if RAG is needed
-       - If clarification → skip to prepare_messages (use history)
-       - Otherwise → proceed to hybrid_retrieval
-    5. hybrid_retrieval: BM25 + embeddings + fuzzy matching → top-5 docs
-    6. prepare_messages: Build context-aware messages with conversation history and retrieved docs
-    7. agent: Generate response (no tools)
-    8. finalize: Extract final response from messages
-    9. user_output: Display response to user with optional streaming
-    10. save_turn: Save query-response pair to conversation memory
-    11. prompt_continue: Ask user if they want to continue conversation
-    12. reset_for_next_turn: Clear per-query state (preserve history), loop back to preprocessing OR END
+    Nodes (6 total):
+    1. **security_gateway**: ProtectAI DeBERTa v3 prompt injection detection
+       - Validates user query for malicious content
+       - Blocks if threat detected (is_blocked=True)
+
+    2. **input_preprocessor**: Query cleaning and history detection
+       - Removes filler words from queries
+       - Detects conversation history requests
+       - Routes history queries directly to conversation_memory
+
+    3. **router**: Query decomposition with fast path optimization
+       - Fast path: Regex-based routing (<10ms) for simple queries
+       - LLM router: Gemini for complex queries (~1.5s)
+       - Uses codebase tree for intelligent folder/file selection
+
+    4. **retrieval**: Hybrid search + context expansion (integrated)
+       - BM25 (weight: 0.4) with code-aware tokenization
+       - Vector (weight: 1.0) with FAISS lazy loading
+       - Context expansion: parent class, sibling methods, child sections
+
+    5. **synthesis**: Streaming answer generation with citations
+       - Streams response to stdout for real-time feedback
+       - Formats code references with file:line citations
+
+    6. **conversation_memory**: Combined save + reset operations
+       - Stores (query, answer, citations, timestamp) tuple
+       - Controls conversation loop via external flag
 
     Returns:
         Configured StateGraph instance (not yet compiled)
 
     Example:
-        >>> graph = build_agent_graph()
+        >>> graph = build_code_rag_graph()
         >>> app = graph.compile()
-        >>> result = app.invoke({"user_input": "How do I add persistence to LangGraph?"})
-        >>> print(result["final_response"])
+        >>> result = app.invoke({"user_query": "How does BM25 tokenization work?"})
+        >>> print(result["final_answer"])
     """
     # Import heavy dependencies only when building graph
     from langgraph.graph import END, StateGraph
 
-    from src.nodes.security_gateway import security_gateway_node
-    from src.nodes.intent_classification import intent_classification_node
-    from src.nodes.hybrid_retrieval_vector import hybrid_retrieval_node
-    from src.llm.llm_nodes import (
-        simple_agent_node,
-    )
-    from src.llm import get_cached_llm
-    from .state import AgentState
-    from .routing import (
+    from src.agent.nodes.conversation_memory import conversation_memory_node
+    from src.agent.nodes.input_preprocessor import input_preprocessor_node
+    from src.agent.nodes.retrieval import retrieval_node
+    from src.agent.nodes.router import router_node
+    from src.agent.nodes.security_gateway import security_gateway_node
+    from src.agent.nodes.synthesis import synthesis_node
+    from src.agent.routing import (
+        route_after_conversation_memory,
+        route_after_input_preprocessor,
         route_after_security_gateway,
-        route_after_intent_classification,
-        route_after_prompt_continue,
     )
-    from src.nodes.agent_response import prepare_agent_messages_node, extract_response_node
-    from src.nodes.conversation_memory import save_conversation_turn_node, prompt_continue_node
-    from src.nodes.state_reset import reset_for_next_turn_node
-    from src.nodes.user_output import user_output_node
-    from .initialization import initialize_system
+    from src.agent.state import AgentState
+    from src.llm import initialize_llm_cache
 
-    logger.info("Building agent graph with hybrid RAG...")
+    logger.info("Building Code RAG Agent graph (v1.2)...")
 
-    # Initialize LLM cache and RAG components (parallel initialization of PKL files + VectorDB)
-    # This is idempotent - safe to call multiple times
-    initialize_system()
-
-    # Get cached agent LLM
-    agent_model_name = LEVEL_TO_MODEL[AGENT_MODEL_LEVEL]
-    agent_llm = get_cached_llm(agent_model_name)
-    logger.info(f"Agent will use {agent_model_name} ({AGENT_MODEL_LEVEL}) with temperature={AGENT_TEMPERATURE}")
-    logger.info("Agent will run without tools (ask_user removed)")
+    # Initialize LLM cache
+    initialize_llm_cache()
+    logger.info(f"[SUCCESS] LLM cache initialized (router: {ROUTER_MODEL}, synthesis: {SYNTHESIS_MODEL})")
 
     # Create graph
     graph = StateGraph(AgentState)
 
-    # Add nodes (security gateway is first)
+    # Add nodes (6 nodes total)
     graph.add_node("security_gateway", security_gateway_node)
-    graph.add_node("intent_classification", intent_classification_node)
-    graph.add_node("hybrid_retrieval", hybrid_retrieval_node)
-    graph.add_node("prepare_messages", prepare_agent_messages_node)
-    graph.add_node("agent", partial(simple_agent_node, llm=agent_llm, temperature=AGENT_TEMPERATURE, max_tokens=AGENT_MAX_TOKENS))
-    graph.add_node("finalize", extract_response_node)
-    graph.add_node("user_output", user_output_node)
+    graph.add_node("input_preprocessor", input_preprocessor_node)
+    graph.add_node("router", partial(router_node, repo_root=HTTPX_REPO_DIR))
+    graph.add_node("retrieval", retrieval_node)
+    graph.add_node("synthesis", synthesis_node)
+    graph.add_node("conversation_memory", conversation_memory_node)
 
-    # Conversation memory nodes
-    graph.add_node("save_turn", save_conversation_turn_node)
-    graph.add_node("prompt_continue", prompt_continue_node)
-    graph.add_node("reset_for_next_turn", reset_for_next_turn_node)
+    logger.debug("[SUCCESS] Added 6 nodes")
 
-    logger.debug("Added all nodes (including security gateway and conversation memory)")
-
-    # Set entry point (security gateway is now the first node)
+    # Set entry point
     graph.set_entry_point("security_gateway")
 
-    # Add conditional edges (security gateway → END if blocked, intent_classification if safe)
+    # Add edges
+
+    # Security gateway → END if blocked, input_preprocessor if safe
     graph.add_conditional_edges(
         "security_gateway",
         route_after_security_gateway,
         {
-            "intent_classification": "intent_classification",
+            "input_preprocessor": "input_preprocessor",
             "END": END,
         },
     )
 
-    # Intent classification routes to RAG or prepare_messages
-    # (now includes preprocessing + security analysis internally)
+    # Input preprocessor → three possible paths:
+    # 1. conversation_memory: History query (final_answer already set)
+    # 2. synthesis: Follow-up with sufficient history (skip retrieval)
+    # 3. router: New question or follow-up needing fresh retrieval
     graph.add_conditional_edges(
-        "intent_classification",
-        route_after_intent_classification,
+        "input_preprocessor",
+        route_after_input_preprocessor,
         {
-            "hybrid_retrieval": "hybrid_retrieval",
-            "prepare_messages": "prepare_messages",
+            "conversation_memory": "conversation_memory",  # History query shortcut
+            "synthesis": "synthesis",  # Follow-up (history sufficient)
+            "router": "router",  # Normal flow (needs retrieval)
         },
     )
 
-    # Hybrid retrieval pipeline
-    graph.add_edge("hybrid_retrieval", "prepare_messages")
-    graph.add_edge("prepare_messages", "agent")
+    # Linear pipeline: router → retrieval → synthesis → conversation_memory
+    graph.add_edge("router", "retrieval")
+    graph.add_edge("retrieval", "synthesis")
+    graph.add_edge("synthesis", "conversation_memory")
 
-    # Agent goes directly to finalize (no tools)
-    graph.add_edge("agent", "finalize")
-
-    # Conversation memory flow (with user output)
-    graph.add_edge("finalize", "user_output")
-    graph.add_edge("user_output", "save_turn")
-    graph.add_edge("save_turn", "prompt_continue")
-
-    # Conversation loop or end
+    # Conversation loop: back to security_gateway for new queries, or end
     graph.add_conditional_edges(
-        "prompt_continue",
-        route_after_prompt_continue,
+        "conversation_memory",
+        route_after_conversation_memory,
         {
-            "reset_for_next_turn": "reset_for_next_turn",
+            "security_gateway": "security_gateway",  # Loop back (new query needs validation)
             "END": END,
         },
     )
 
-    # Loop back to intent_classification for next query
-    graph.add_edge("reset_for_next_turn", "intent_classification")
-
-    logger.debug("Added all edges (including conversation loop)")
-    logger.info("Agent graph with hybrid RAG and conversation memory built successfully")
+    logger.debug("[SUCCESS] Added all edges")
+    logger.info("[SUCCESS] Code RAG Agent graph (v1.2) built successfully")
 
     return graph
 
 
 def get_compiled_graph(
-    checkpointer: Optional[Any] = None,
+    checkpointer: Any | None = None,
 ) -> Any:
-    """
-    Get a compiled graph ready for execution.
+    """Get a compiled Code RAG Agent graph ready for execution.
 
     Args:
         checkpointer: Optional checkpointer for state persistence
@@ -217,11 +190,12 @@ def get_compiled_graph(
 
     Example:
         >>> app = get_compiled_graph()
-        >>> result = app.invoke({"user_input": "How do I create a LangChain agent?"})
-        >>> print(result["final_response"])
+        >>> result = app.invoke({"user_query": "How does BM25 work?"})
+        >>> print(result["final_answer"])
+        >>> print(result["citations"])
     """
-    graph = build_agent_graph()
+    graph = build_code_rag_graph()
     logger.info("Compiling graph...")
     compiled = graph.compile(checkpointer=checkpointer)
-    logger.info("Graph compiled successfully")
+    logger.info("[SUCCESS] Graph compiled successfully")
     return compiled

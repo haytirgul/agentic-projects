@@ -12,12 +12,17 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from const import TEXT_EXTENSIONS
+# Setup project paths first - must be done before importing from const/settings/models
+from utils import setup_project_paths
+
+project_root = setup_project_paths()
+
 from settings import (
     HTTPX_REPO_DIR,
     MAX_CHUNK_SIZE_TEXT,
     REPO_EXCLUDE_PATTERNS,
     TEXT_CHUNKS_FILE,
+    TEXT_EXTENSIONS,
 )
 from utils import (
     create_chunk_id,
@@ -26,12 +31,9 @@ from utils import (
     print_processing_stats,
     safe_read_file,
     save_json_chunks,
-    setup_project_paths,
     should_exclude,
 )
 
-# Initialize project and logging
-project_root = setup_project_paths()
 logger = logging.getLogger(__name__)
 
 from models.chunk import TextChunk
@@ -137,14 +139,18 @@ def process_text_file(file_path: Path) -> list[dict[str, Any]]:
     return chunks
 
 
-def main():
-    """Main entry point."""
+def main() -> int:
+    """Main entry point.
+
+    Returns:
+        0 on success, 1 on failure
+    """
     logger.info("Starting text file processing...")
 
     if not HTTPX_REPO_DIR.exists():
         logger.error(f"Repository not found at {HTTPX_REPO_DIR}")
         logger.error("Run clone_httpx_repo.py first")
-        sys.exit(1)
+        return 1
 
     # Find all text files to process
     text_files = []
@@ -172,15 +178,17 @@ def main():
 
     # Save chunks to JSON using utility function
     if save_json_chunks(all_chunks, TEXT_CHUNKS_FILE):
-        logger.info(f"✅ Saved chunks to {TEXT_CHUNKS_FILE}")
+        logger.info(f"[SUCCESS] Saved chunks to {TEXT_CHUNKS_FILE}")
     else:
-        logger.error("❌ Failed to save chunks")
-        return
+        logger.error("[ERROR] Failed to save chunks")
+        return 1
 
     # Generate and print statistics using utility functions
     stats = generate_processing_stats(all_chunks)
     print_processing_stats(stats, logger)
 
+    return 0
+
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

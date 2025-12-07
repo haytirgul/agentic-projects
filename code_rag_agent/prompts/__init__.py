@@ -1,34 +1,40 @@
-"""Prompt templates for the code RAG agent.
+"""Prompts module for LLM interactions.
 
-This package contains all prompt templates used by the agent nodes.
-Following the RAG_agent pattern, prompts are isolated here with message
-builder functions for easy LLM integration.
+This module contains all LLM prompts used by the Code RAG Agent,
+including router prompts for query decomposition, synthesis prompts
+for answer generation, and intent prompts for query classification.
+
+Author: Hay Hoffman
+Version: 1.2
 """
 
-from prompts.router_prompts import (
-    ROUTER_SYSTEM_PROMPT,
-    ROUTER_USER_PROMPT_TEMPLATE,
-    SAMPLE_ROUTER_DECISIONS,
-    get_router_prompts,
-    build_router_messages,
+from prompts.intent_prompt import (
+    INTENT_SYSTEM_PROMPT,
+    INTENT_USER_PROMPT_TEMPLATE,
+    build_intent_prompt,
 )
-from prompts.synthesizer_prompts import (
-    SYNTHESIZER_SYSTEM_PROMPT,
-    SYNTHESIZER_USER_PROMPT_TEMPLATE,
-    SAMPLE_SYNTHESIZED_ANSWERS,
-    get_synthesizer_prompts,
-    build_synthesizer_messages,
+from prompts.router_prompt import (
+    ROUTER_PROMPT,
+    build_router_prompt,
+    generate_codebase_tree,
+)
+from prompts.synthesis_prompt import (
+    build_synthesis_messages,
+    build_system_prompt,
+    build_user_prompt,
 )
 
 __all__ = [
-    "ROUTER_SYSTEM_PROMPT",
-    "ROUTER_USER_PROMPT_TEMPLATE",
-    "SAMPLE_ROUTER_DECISIONS",
-    "get_router_prompts",
-    "build_router_messages",
-    "SYNTHESIZER_SYSTEM_PROMPT",
-    "SYNTHESIZER_USER_PROMPT_TEMPLATE",
-    "SAMPLE_SYNTHESIZED_ANSWERS",
-    "get_synthesizer_prompts",
-    "build_synthesizer_messages",
+    # Intent classification prompts
+    "INTENT_SYSTEM_PROMPT",
+    "INTENT_USER_PROMPT_TEMPLATE",
+    "build_intent_prompt",
+    # Router prompts
+    "ROUTER_PROMPT",
+    "build_router_prompt",
+    "generate_codebase_tree",
+    # Synthesis prompts
+    "build_synthesis_messages",
+    "build_system_prompt",
+    "build_user_prompt",
 ]

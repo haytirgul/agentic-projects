@@ -4,63 +4,18 @@ This module defines the data structures used by the Synthesizer node to generate
 grounded answers with precise citations from retrieved code chunks.
 """
 
+from __future__ import annotations
+
 from datetime import datetime
-from typing import List, Optional, Dict, Any
-from pydantic import BaseModel, Field
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
+
+from pydantic import BaseModel, Field
+
+if TYPE_CHECKING:
+    from models.retrieval import RetrievedChunk
 
 __all__ = ["SynthesisRequest", "Citation", "SynthesizedAnswer", "SynthesisMetadata"]
-
-
-class SynthesisRequest(BaseModel):
-    """Input to the Synthesizer node containing retrieval results and query context.
-
-    Combines the original query, retrieval results, and synthesis parameters.
-    """
-
-    user_query: str = Field(
-        ...,
-        description="Original user question"
-    )
-    retrieval_result: 'RetrievalResult' = Field(
-        ...,
-        description="Complete retrieval results with chunks and metadata"
-    )
-    max_answer_length: int = Field(
-        2000,
-        ge=100,
-        le=8000,
-        description="Maximum answer length in characters"
-    )
-    include_raw_chunks: bool = Field(
-        False,
-        description="Whether to include raw chunk data in output"
-    )
-    synthesis_style: str = Field(
-        "concise",
-        description="Answer style: concise, detailed, explanatory",
-        pattern="^(concise|detailed|explanatory)$"
-    )
-
-    @property
-    def available_chunks(self) -> List['RetrievedChunk']:
-        """Get all retrieved chunks."""
-        return self.retrieval_result.chunks
-
-    @property
-    def top_chunks(self, n: int = 5) -> List['RetrievedChunk']:
-        """Get top N chunks by relevance score."""
-        return sorted(self.available_chunks, key=lambda x: x.final_score, reverse=True)[:n]
-
-    @property
-    def query_type(self) -> str:
-        """Extract query type from retrieval metadata if available."""
-        # This would be passed from the router decision
-        return getattr(self.retrieval_result.request.router_decision.analysis, 'query_type', 'general')
-
-    class Config:
-        """Pydantic configuration."""
-        arbitrary_types_allowed = True
 
 
 class Citation(BaseModel):
@@ -117,12 +72,12 @@ class Citation(BaseModel):
         context = f" ({self.parent_context})" if self.parent_context else ""
         return f"{self.file_path}:{self.start_line}-{self.end_line}{context}"
 
-    def matches_chunk(self, chunk: 'RetrievedChunk') -> bool:
+    def matches_chunk(self, chunk: RetrievedChunk) -> bool:
         """Check if this citation matches a retrieved chunk."""
         return (
-            self.file_path == chunk.file_path and
-            self.start_line == chunk.start_line and
-            self.end_line == chunk.end_line
+            self.file_path == chunk.chunk.file_path and
+            self.start_line == chunk.chunk.start_line and
+            self.end_line == chunk.chunk.end_line
         )
 
     class Config:
@@ -199,7 +154,7 @@ class SynthesisMetadata(BaseModel):
         False,
         description="Whether fallback strategies were used"
     )
-    processing_warnings: List[str] = Field(
+    processing_warnings: list[str] = Field(
         default_factory=list,
         description="Any warnings generated during synthesis"
     )
@@ -211,6 +166,41 @@ class SynthesisMetadata(BaseModel):
         }
 
 
+class SynthesisRequest(BaseModel):
+    """Input to the Synthesizer node containing query and chunks.
+
+    Simplified request model that uses expanded chunks directly.
+    """
+
+    user_query: str = Field(
+        ...,
+        description="Original user question"
+    )
+    expanded_chunks: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description="Expanded chunks from retrieval (serialized as dicts)"
+    )
+    max_answer_length: int = Field(
+        2000,
+        ge=100,
+        le=8000,
+        description="Maximum answer length in characters"
+    )
+    include_raw_chunks: bool = Field(
+        False,
+        description="Whether to include raw chunk data in output"
+    )
+    synthesis_style: str = Field(
+        "concise",
+        description="Answer style: concise, detailed, explanatory",
+        pattern="^(concise|detailed|explanatory)$"
+    )
+
+    class Config:
+        """Pydantic configuration."""
+        arbitrary_types_allowed = True
+
+
 class SynthesizedAnswer(BaseModel):
     """Complete synthesized answer with citations and metadata.
 
@@ -218,15 +208,15 @@ class SynthesizedAnswer(BaseModel):
     answer grounded in retrieved code with precise citations.
     """
 
-    request: SynthesisRequest = Field(
+    user_query: str = Field(
         ...,
-        description="Original synthesis request"
+        description="Original user query"
     )
     answer: str = Field(
         ...,
         description="Generated answer text"
     )
-    citations: List[Citation] = Field(
+    citations: list[Citation] = Field(
         default_factory=list,
         description="Citations supporting the answer"
     )
@@ -246,7 +236,7 @@ class SynthesizedAnswer(BaseModel):
         if not self.citations:
             return "No citations available"
 
-        paths = {}
+        paths: dict[str, list[str]] = {}
         for citation in self.citations:
             path_str = str(citation.file_path)
             if path_str not in paths:
@@ -273,24 +263,32 @@ class SynthesizedAnswer(BaseModel):
 
         return answer_text
 
-    def get_citations_for_claim(self, claim_text: str) -> List[Citation]:
+    def get_citations_for_claim(self, claim_text: str) -> list[Citation]:
         """Find citations that support a specific claim."""
         return [
             citation for citation in self.citations
             if claim_text.lower() in citation.claim_supported.lower()
         ]
 
-    def validate_citations(self) -> Dict[str, Any]:
-        """Validate that all citations reference actual retrieved chunks."""
-        validation_results = {
+    def validate_citations(
+        self,
+        available_chunks: list[RetrievedChunk]
+    ) -> dict[str, Any]:
+        """Validate that all citations reference actual retrieved chunks.
+
+        Args:
+            available_chunks: List of retrieved chunks to validate against
+
+        Returns:
+            Validation results with counts and warnings
+        """
+        validation_results: dict[str, Any] = {
             "total_citations": len(self.citations),
             "valid_citations": 0,
             "invalid_citations": 0,
             "missing_chunks": [],
             "validation_warnings": []
         }
-
-        available_chunks = self.request.available_chunks
 
         for citation in self.citations:
             chunk_matches = [
@@ -299,9 +297,13 @@ class SynthesizedAnswer(BaseModel):
             ]
 
             if chunk_matches:
-                validation_results["valid_citations"] += 1
+                validation_results["valid_citations"] = (
+                    int(validation_results["valid_citations"]) + 1
+                )
             else:
-                validation_results["invalid_citations"] += 1
+                validation_results["invalid_citations"] = (
+                    int(validation_results["invalid_citations"]) + 1
+                )
                 validation_results["missing_chunks"].append(citation.citation_string)
                 validation_results["validation_warnings"].append(
                     f"Citation {citation.citation_string} does not match any retrieved chunk"

@@ -1,86 +1,116 @@
-"""State schema for the LangGraph documentation assistant.
+"""State schema for the Code RAG Agent.
 
-This module defines the shared state structure used across all graph nodes.
+This module defines the shared state structure used across all graph nodes
+in the retrieval and synthesis pipeline.
+
+Author: Hay Hoffman
+Version: 1.2
 """
 
-from typing import List, Optional, TypedDict
+from typing import TypedDict
+
 from langchain_core.messages import BaseMessage
-from models.intent_classification import IntentClassification
-from models.conversation_memory import ConversationMemory
+from models.retrieval import RouterOutput
 
 __all__ = ["AgentState"]
 
 
 class AgentState(TypedDict, total=False):
-    """State schema for the documentation assistant agent.
+    """State schema for the Code RAG Agent.
 
     This state is shared across all nodes in the LangGraph workflow.
     Each node can read from and write to this state.
 
     Attributes:
         # User input
-        user_input: The user's original request
-        cleaned_request: Cleaned/parsed version of the request
-        code_snippets: Extracted code from user input
-        extracted_data: Extracted structured data (errors, configs)
-
-        # Intent classification
-        intent_result: Intent classification result
-
-        # RAG retrieval
-        retrieved_documents: Top-5 documents from hybrid retrieval (as dicts for serialization)
-        retrieval_metadata: Debugging/analysis metadata for retrieval
-
-        # Agent processing
-        messages: Conversation messages for the agent
-        final_response: The agent's final response to the user
+        user_query: The user's original code question
 
         # Security validation
         gateway_passed: Whether request passed security validation
         gateway_reason: Reason for security validation failure
+        is_blocked: Whether request was blocked by security
 
-        # Conversation memory
-        conversation_memory: Complete conversation history
-        continue_conversation: Flag to continue conversation or end
+        # Input preprocessing (v1.2, v1.3, v1.4)
+        cleaned_query: Query after filler removal and reference resolution
+        is_history_query: True if user asks about conversation history
+        is_follow_up: True if query references previous context
+        is_general_question: True if query is general (no retrieval needed) (v1.3)
+        is_out_of_scope: True if query contains non-HTTPX code (v1.4)
+        needs_retrieval: True if fresh retrieval is needed (v1.3)
+
+        # Router output
+        router_output: Query decomposition and retrieval planning (RouterOutput)
+        codebase_tree: Filtered directory tree for router context
+
+        # Retrieval results
+        retrieved_chunks: list of retrieved chunks with RRF scores (RetrievedChunk)
+        expanded_chunks: Chunks with context expansion (ExpandedChunk)
+        retrieval_metadata: Debugging metadata (chunk counts, scores, etc.)
+
+        # Synthesis
+        messages: Conversation messages for LLM synthesis
+        final_answer: The synthesized answer with citations
+        citations: list of code citations (file:line references)
+
+        # Conversation history
+        conversation_history: list of previous (query, answer) pairs
+        turn_count: Number of turns in current conversation
+
+        # Error handling
+        error: Error message if pipeline fails
 
     Example:
+        >>> from models.retrieval import RouterOutput, RetrievalRequest
         >>> state = AgentState(
-        ...     user_input="How do I add persistence to LangGraph?",
-        ...     cleaned_request="How do I add persistence to LangGraph?",
-        ...     intent_result=IntentClassification(
-        ...         framework="langgraph",
-        ...         language="python",
-        ...         keywords=["persistence"],
-        ...         topics=["persistence"],
-        ...         intent_type="implementation_guide",
-        ...         requires_rag=True
+        ...     user_query="How does BM25 tokenization work?",
+        ...     gateway_passed=True,
+        ...     router_output=RouterOutput(
+        ...         cleaned_query="BM25 tokenization implementation",
+        ...         retrieval_requests=[
+        ...             RetrievalRequest(
+        ...                 query="BM25 tokenize split camelCase",
+        ...                 source_types=["code"],
+        ...                 folders=["src/retrieval/"],
+        ...                 file_patterns=["hybrid_retriever.py"],
+        ...                 reasoning="Need BM25 tokenization logic"
+        ...             )
+        ...         ]
         ...     )
         ... )
     """
 
     # User input
-    user_input: str
-    cleaned_request: Optional[str]
-    code_snippets: Optional[List[str]]
-    extracted_data: Optional[dict]
-
-    # Intent classification
-    intent_result: Optional[IntentClassification]
-
-    # RAG retrieval
-    retrieved_documents: Optional[List[dict]]
-    retrieval_metadata: Optional[dict]
-
-    # Agent processing
-    messages: list[BaseMessage]
-    # Note: streaming_response is not in state schema because generators can't be serialized
-    # Streaming responses are consumed immediately and not persisted
-    final_response: Optional[str]
+    user_query: str
 
     # Security validation
-    gateway_passed: Optional[bool]
-    gateway_reason: Optional[str]
+    gateway_passed: bool | None
+    gateway_reason: str | None
+    is_blocked: bool | None
 
-    # Conversation memory
-    conversation_memory: Optional[ConversationMemory]
-    continue_conversation: Optional[bool]
+    # Input preprocessing (v1.2, v1.3, v1.4)
+    cleaned_query: str | None
+    is_history_query: bool | None
+    is_follow_up: bool | None
+    is_general_question: bool | None  # v1.3: General question (no retrieval needed)
+    is_out_of_scope: bool | None  # v1.4: Query about non-HTTPX code
+    needs_retrieval: bool | None  # v1.3: Whether fresh retrieval is needed
+
+    # Router output (query decomposition)
+    router_output: RouterOutput | None
+
+    # Retrieval results
+    retrieved_chunks: list[dict] | None  # Serialized RetrievedChunk objects
+    expanded_chunks: list[dict] | None  # Serialized ExpandedChunk objects
+    retrieval_metadata: dict | None
+
+    # Synthesis
+    messages: list[BaseMessage]
+    final_answer: str | None
+    citations: list[dict] | None
+
+    # Conversation history (for follow-up questions)
+    conversation_history: list[dict] | None  # list of {query, answer, timestamp}
+    turn_count: int | None
+
+    # Error handling
+    error: str | None

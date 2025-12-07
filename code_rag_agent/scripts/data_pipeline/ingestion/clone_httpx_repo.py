@@ -88,10 +88,10 @@ def main():
     success = clone_or_update_repo()
 
     if success:
-        logger.info("✅ Repository ready for indexing")
+        logger.info("[SUCCESS] Repository ready for indexing")
         sys.exit(0)
     else:
-        logger.error("❌ Failed to prepare repository")
+        logger.error("[ERROR] Failed to prepare repository")
         sys.exit(1)
 
 
