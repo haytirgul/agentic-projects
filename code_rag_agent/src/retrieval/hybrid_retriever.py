@@ -1,23 +1,35 @@
 """Hybrid retrieval combining BM25 and FAISS with weighted RRF.
 
 This module implements the core retrieval architecture specified in
-RETRIEVAL_ARCHITECTURE.md v1.2, featuring:
+RETRIEVAL_ARCHITECTURE.md v1.3, featuring:
 - Weighted Reciprocal Rank Fusion (0.4/1.0 for BM25/Vector)
 - Code-aware BM25 tokenization (camelCase, snake_case splitting)
 - Graduated fallback to prevent zero-result failures
 - Soft folder filtering (boost, not exclude) to preserve recall
 - Metadata-based filtering for source_type and file_patterns
 
+v1.3 Optimizations:
+- Pre-built BM25 indices per source_type (avoid rebuild per query)
+- Pre-compiled regex patterns for tokenization
+- Pre-built id->file_path lookup dict
+- Async parallel BM25 + FAISS search
+- Optimized FAISS vector reconstruction
+
 Author: Hay Hoffman
-Version: 1.2
+Version: 1.3
 """
 
+import asyncio
 import logging
 import re
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import numpy as np
+from rank_bm25 import BM25Okapi
+
+from models.retrieval import RetrievalRequest, RetrievedChunk
 from settings import (
     BM25_KEEP_HEX_CODES,
     BM25_MIN_TOKEN_LENGTH,
@@ -28,37 +40,43 @@ from settings import (
     RRF_K,
     RRF_VECTOR_WEIGHT,
 )
-from models.retrieval import RetrievalRequest, RetrievedChunk
-from rank_bm25 import BM25Okapi
 
 logger = logging.getLogger(__name__)
 
 __all__ = ["HybridRetriever"]
 
+# Pre-compiled regex patterns for tokenization (v1.3 optimization)
+_CAMEL_CASE_PATTERN_1 = re.compile(r'(?<=[a-z])(?=[A-Z])')  # lowercase → uppercase
+_CAMEL_CASE_PATTERN_2 = re.compile(r'(?<=[A-Z])(?=[A-Z][a-z])')  # HTTPSServer → HTTPS Server
+_UNDERSCORE_PATTERN = re.compile(r'_+')
+_NON_ALPHANUM_PATTERN = re.compile(r'[^a-zA-Z0-9x\s]')
+
 
 class HybridRetriever:
-    """Hybrid retrieval combining BM25 and FAISS with weighted RRF (v1.2).
+    """Hybrid retrieval combining BM25 and FAISS with weighted RRF (v1.3).
 
-    Key Features (v1.2):
+    Key Features (v1.3):
     - Weighted RRF (BM25: 0.4, Vector: 1.0) for class chunk recall
     - Code-aware tokenization (camelCase/snake_case splitting)
     - Graduated fallback (4 levels) to prevent zero results
     - SOFT folder filtering: boost scores for folder matches (don't exclude)
-    - Metadata filtering for source_type and file_patterns only
-
-    v1.2 Change: Folder filtering is now SOFT (boost, not exclude).
-    This prevents LLM folder inference from reducing recall when it guesses wrong.
+    - Pre-built BM25 indices per source_type (avoid rebuild per query)
+    - Async parallel search for BM25 + FAISS
+    - Pre-built lookup dicts for O(1) access
 
     Attributes:
         metadata_index: Chunk metadata for filtering
         metadata_filter: MetadataFilter instance (for compatibility)
         faiss_store: FAISS vector store
         chunk_loader: Chunk content loader
-        bm25_cache: Cached BM25 indices for reuse
+        bm25_indices: Pre-built BM25 indices per source_type
+        id_to_file_path: Pre-built chunk_id -> file_path mapping
+        id_to_tokens: Pre-built chunk_id -> tokenized content mapping
         bm25_weight: Weight for BM25 in RRF scoring
         vector_weight: Weight for vector search in RRF scoring
         folder_boost: Multiplier for chunks matching inferred folders
         _embedding_model: Cached SentenceTransformer model (lazy-loaded)
+        _executor: ThreadPoolExecutor for parallel search
     """
 
     # Class-level cached embedding model (shared across instances)
@@ -97,6 +115,9 @@ class HybridRetriever:
         self.vector_weight = vector_weight
         self.folder_boost = folder_boost
 
+        # Thread pool for parallel search (v1.3)
+        self._executor = ThreadPoolExecutor(max_workers=2)
+
         # Path-based initialization
         if chunks_dir is not None and index_dir is not None:
             from src.retrieval.chunk_loader import ChunkLoader
@@ -130,8 +151,15 @@ class HybridRetriever:
         # Create a MetadataFilter-compatible wrapper for backward compatibility
         self.metadata_filter = _MetadataFilterCompat(self.metadata_index)
 
-        # BM25 indices (built on-demand from filtered corpus)
-        self.bm25_cache: dict[str, BM25Okapi] = {}
+        # v1.3: Pre-build optimized lookup structures
+        logger.info("Building optimized lookup structures...")
+        self.id_to_file_path: dict[str, str] = {}
+        self.id_to_tokens: dict[str, list[str]] = {}
+        self.bm25_indices: dict[str, BM25Okapi] = {}
+        self.bm25_chunk_ids: dict[str, list[str]] = {}  # source_type -> ordered chunk IDs
+
+        self._build_lookup_structures()
+        self._build_bm25_indices()
 
         logger.info(
             f"HybridRetriever initialized: "
@@ -179,28 +207,62 @@ class HybridRetriever:
 
         return metadata_index
 
+    def _build_lookup_structures(self):
+        """Build pre-computed lookup dicts for O(1) access (v1.3).
+
+        Builds:
+        - id_to_file_path: chunk_id -> file_path (for folder boost)
+        - id_to_tokens: chunk_id -> tokenized content (for BM25)
+        """
+        for source_type, chunks_meta in self.metadata_index.items():
+            for meta in chunks_meta:
+                # id -> file_path mapping
+                self.id_to_file_path[meta.id] = meta.file_path
+
+                # id -> tokens mapping (pre-tokenize all chunks)
+                chunk = self.chunk_loader.load_chunk(meta.id)
+                self.id_to_tokens[meta.id] = self._tokenize(chunk.content)
+
+        logger.info(
+            f"Built lookup structures: "
+            f"{len(self.id_to_file_path)} id->file_path, "
+            f"{len(self.id_to_tokens)} id->tokens"
+        )
+
+    def _build_bm25_indices(self):
+        """Build pre-computed BM25 indices per source_type (v1.3).
+
+        This avoids rebuilding BM25 index on every search query.
+        """
+        for source_type, chunks_meta in self.metadata_index.items():
+            if not chunks_meta:
+                continue
+
+            # Get ordered chunk IDs and their tokens
+            chunk_ids = [meta.id for meta in chunks_meta]
+            tokenized_corpus = [self.id_to_tokens[cid] for cid in chunk_ids]
+
+            # Build BM25 index
+            self.bm25_indices[source_type] = BM25Okapi(tokenized_corpus)
+            self.bm25_chunk_ids[source_type] = chunk_ids
+
+            logger.info(f"Built BM25 index for {source_type}: {len(chunk_ids)} chunks")
+
     def search(
         self,
         request: RetrievalRequest,
         top_k: int = 20
     ) -> list[RetrievedChunk]:
-        """Execute hybrid search with soft folder boosting (v1.2).
+        """Execute hybrid search with soft folder boosting (v1.3).
 
-        v1.2 Update: Folder filtering is now SOFT (boost, not exclude).
-        This prevents LLM folder inference from reducing recall.
+        v1.3 Update: Uses pre-built BM25 indices and parallel search.
 
         Steps:
         1. Metadata filtering (source_type + file_patterns only)
-        2. BM25 search (on filtered corpus with code-aware tokenization)
-        3. FAISS search (on filtered vectors)
-        4. Weighted RRF ranking (0.4/1.0 for BM25/Vector)
-        5. Apply folder boost to chunks matching inferred folders
-        6. Return top-k chunks
-
-        Fallback chain (for file_patterns only):
-        - Attempt 1: With file_patterns
-        - Attempt 2: Drop file_patterns if zero results
-        - Attempt 3: Emergency (search all source_types)
+        2. Parallel: BM25 search + FAISS search
+        3. Weighted RRF ranking (0.4/1.0 for BM25/Vector)
+        4. Apply folder boost to chunks matching inferred folders
+        5. Return top-k chunks
 
         Args:
             request: Retrieval request with query and filters
@@ -256,25 +318,30 @@ class HybridRetriever:
             f"for query: {request.query}"
         )
 
-        # Build chunk_id -> file_path mapping for folder boost
-        chunk_file_paths = self._get_chunk_file_paths(candidate_ids)
+        # Convert to set for O(1) lookup (v1.3 optimization)
+        candidate_id_set = set(candidate_ids)
 
-        # 2. BM25 search (code-aware tokenization)
-        bm25_results = self._bm25_search(
-            query=request.query,
-            candidate_ids=candidate_ids,
-            top_n=50
+        # 2. Parallel BM25 + FAISS search (v1.3)
+        bm25_future = self._executor.submit(
+            self._bm25_search_optimized,
+            request.query,
+            candidate_id_set,
+            request.source_types,
+            50
+        )
+        faiss_future = self._executor.submit(
+            self._faiss_search_optimized,
+            request.query,
+            candidate_id_set,
+            request.source_types,
+            50
         )
 
-        # 3. FAISS search
-        faiss_results = self._faiss_search(
-            query=request.query,
-            candidate_ids=candidate_ids,
-            source_types=request.source_types,
-            top_n=50
-        )
+        # Wait for both to complete
+        bm25_results = bm25_future.result()
+        faiss_results = faiss_future.result()
 
-        # 4. Weighted RRF ranking (use instance weights)
+        # 3. Weighted RRF ranking
         ranked_ids = self._reciprocal_rank_fusion(
             bm25_results=bm25_results,
             faiss_results=faiss_results,
@@ -283,22 +350,21 @@ class HybridRetriever:
             vector_weight=self.vector_weight
         )
 
-        # 5. Apply folder boost (soft filtering - boost, don't exclude)
+        # 4. Apply folder boost (soft filtering - boost, don't exclude)
         if request.folders:
             ranked_ids = self._apply_folder_boost(
                 ranked_ids=ranked_ids,
                 folders=request.folders,
-                chunk_file_paths=chunk_file_paths,
                 boost_factor=self.folder_boost
             )
-            logger.info(
+            logger.debug(
                 f"Applied folder boost ({self.folder_boost}x) for folders: {request.folders}"
             )
 
-        # 6. Get top-k
+        # 5. Get top-k
         top_results = ranked_ids[:top_k]
 
-        # 7. Load full chunks and attach metadata
+        # 6. Load full chunks and attach metadata
         retrieved_chunks = []
         for chunk_id, rrf_score in top_results:
             chunk = self.chunk_loader.load_chunk(chunk_id)
@@ -313,129 +379,75 @@ class HybridRetriever:
 
         return retrieved_chunks
 
-    def _bm25_search(
+    def _bm25_search_optimized(
         self,
         query: str,
-        candidate_ids: list[str],
+        candidate_id_set: set[str],
+        source_types: list[str],
         top_n: int = 50
     ) -> list[tuple[str, float]]:
-        """BM25 search on filtered corpus with code-aware tokenization (v1.1).
+        """BM25 search using pre-built indices (v1.3 optimized).
 
-        Strategy: Build temporary BM25 index from filtered chunks
-        (fast for small candidate sets, no need to maintain full index)
+        Uses pre-built BM25 indices instead of rebuilding per query.
+        Filters results to candidate set after scoring.
 
         Args:
             query: Search query string
-            candidate_ids: Pre-filtered chunk IDs to search
+            candidate_id_set: Set of pre-filtered chunk IDs
+            source_types: Source types to search
             top_n: Number of results to return
 
         Returns:
             list of (chunk_id, score) tuples sorted by BM25 score
         """
-        # Load content for candidate chunks
-        candidate_chunks = []
-        for chunk_id in candidate_ids:
-            chunk = self.chunk_loader.load_chunk(chunk_id)
-            candidate_chunks.append({
-                "id": chunk.id,
-                "content": chunk.content
-            })
-
-        # Tokenize corpus (v1.1: code-aware tokenization)
-        tokenized_corpus = [
-            self._tokenize(chunk["content"])
-            for chunk in candidate_chunks
-        ]
-
-        # Build BM25 index
-        bm25 = BM25Okapi(tokenized_corpus)
-
-        # Search
         tokenized_query = self._tokenize(query)
-        scores = bm25.get_scores(tokenized_query)
+        all_results: list[tuple[str, float]] = []
 
-        # Get top-N results
-        top_indices = np.argsort(scores)[::-1][:top_n]
+        for source_type in source_types:
+            if source_type not in self.bm25_indices:
+                continue
 
-        results = [
-            (candidate_chunks[i]["id"], scores[i])
-            for i in top_indices
-        ]
+            bm25 = self.bm25_indices[source_type]
+            chunk_ids = self.bm25_chunk_ids[source_type]
 
-        return results
+            # Get scores for all chunks in this source_type
+            scores = bm25.get_scores(tokenized_query)
 
-    def _tokenize(self, text: str) -> list[str]:
-        """Code-aware tokenization for BM25 (v1.1).
+            # Filter to candidates and collect results
+            for idx, (chunk_id, score) in enumerate(zip(chunk_ids, scores)):
+                if chunk_id in candidate_id_set:
+                    all_results.append((chunk_id, float(score)))
 
-        v1.1 Update: Handles camelCase, snake_case, and preserves hex codes.
+        # Sort by score and return top-N
+        all_results.sort(key=lambda x: x[1], reverse=True)
+        return all_results[:top_n]
 
-        Examples:
-        - "HTTPClient" → ["http", "client"]
-        - "get_user_by_id" → ["get", "user", "by"]
-        - "error 0x884" → ["error", "0x884"]
-
-        Strategy:
-        1. Split camelCase boundaries (lowercase→uppercase)
-        2. Replace underscores and punctuation with spaces
-        3. Lowercase and filter short tokens (except hex codes)
-
-        Args:
-            text: Input text to tokenize
-
-        Returns:
-            list of tokens (strings)
-        """
-        # Step 1: Split camelCase (e.g., 'HTTPClient' → 'HTTP Client')
-        if BM25_SPLIT_CAMELCASE:
-            text = re.sub(r'(?<=[a-z])(?=[A-Z])', ' ', text)  # lowercase → uppercase
-            text = re.sub(r'(?<=[A-Z])(?=[A-Z][a-z])', ' ', text)  # HTTPSServer → HTTPS Server
-
-        # Step 2: Split on underscores and non-alphanumeric (but keep 0x prefix)
-        if BM25_SPLIT_SNAKE_CASE:
-            text = re.sub(r'_+', ' ', text)  # Underscores → spaces
-        text = re.sub(r'[^a-zA-Z0-9x\s]', ' ', text)  # Keep 'x' for hex
-
-        # Step 3: Lowercase and split
-        tokens = text.lower().split()
-
-        # Step 4: Filter short tokens (but keep hex codes like '0x')
-        filtered_tokens = []
-        for t in tokens:
-            if len(t) > BM25_MIN_TOKEN_LENGTH:  # Standard filter
-                filtered_tokens.append(t)
-            elif BM25_KEEP_HEX_CODES and t.startswith('0x'):  # Exception for hex
-                filtered_tokens.append(t)
-
-        return filtered_tokens
-
-    def _faiss_search(
+    def _faiss_search_optimized(
         self,
         query: str,
-        candidate_ids: list[str],
-        source_types: list[str] | list,
+        candidate_id_set: set[str],
+        source_types: list[str],
         top_n: int = 50
     ) -> list[tuple[str, float]]:
-        """FAISS vector search on filtered candidates.
+        """FAISS vector search with optimized reconstruction (v1.3).
 
-        Steps:
-        1. Load relevant FAISS indices (by source_type)
-        2. Get FAISS positions for candidate IDs
-        3. Build temporary index from candidate vectors
-        4. Search and convert to chunk IDs
+        Uses selective vector reconstruction instead of loading all vectors.
 
         Args:
             query: Search query string
-            candidate_ids: Pre-filtered chunk IDs to search
-            source_types: Source types to search (code, markdown, text)
+            candidate_id_set: Set of pre-filtered chunk IDs
+            source_types: Source types to search
             top_n: Number of results to return
 
         Returns:
             list of (chunk_id, similarity_score) tuples
         """
+        import faiss
+
         # Embed query
         query_embedding = self._embed_query(query)
 
-        results = []
+        results: list[tuple[str, float]] = []
 
         # Search each source type's FAISS index
         for source_type in source_types:
@@ -448,42 +460,88 @@ class HybridRetriever:
 
             # Filter candidates to this source type
             source_candidate_ids = [
-                cid for cid in candidate_ids
+                cid for cid in candidate_id_set
                 if cid in id_to_position
             ]
 
             if not source_candidate_ids:
                 continue
 
-            # Get positions and vectors for candidates
-            candidate_positions = [id_to_position[cid] for cid in source_candidate_ids]
-            candidate_vectors = index.reconstruct_n(0, index.ntotal)[candidate_positions]
+            # Get positions for candidates
+            candidate_positions = np.array(
+                [id_to_position[cid] for cid in source_candidate_ids],
+                dtype=np.int64
+            )
 
-            # Create candidate ID mapping
-            candidate_id_map = {pos: cid for pos, cid in zip(candidate_positions, source_candidate_ids)}
+            # v1.3: Use reconstruct_batch for selective reconstruction
+            # This is more efficient than reconstruct_n(0, ntotal)[positions]
+            candidate_vectors = np.zeros(
+                (len(candidate_positions), index.d),
+                dtype=np.float32
+            )
+            for i, pos in enumerate(candidate_positions):
+                candidate_vectors[i] = index.reconstruct(int(pos))
 
             # Create temporary index with only candidates
-            import faiss
             temp_index = faiss.IndexFlatL2(index.d)
             temp_index.add(candidate_vectors)
 
             # Search
             distances, indices = temp_index.search(
-                query_embedding.reshape(1, -1),
+                query_embedding.reshape(1, -1).astype(np.float32),
                 min(top_n, len(candidate_positions))
             )
 
             # Convert back to chunk IDs
             for i, dist in zip(indices[0], distances[0]):
-                original_position = candidate_positions[i]
-                chunk_id = candidate_id_map[original_position]
-                # Convert L2 distance to similarity score
-                similarity = 1 / (1 + dist)
-                results.append((chunk_id, similarity))
+                if i >= 0:  # Valid index
+                    chunk_id = source_candidate_ids[i]
+                    # Convert L2 distance to similarity score
+                    similarity = 1 / (1 + dist)
+                    results.append((chunk_id, float(similarity)))
 
         # Sort by similarity
         results.sort(key=lambda x: x[1], reverse=True)
         return results[:top_n]
+
+    def _tokenize(self, text: str) -> list[str]:
+        """Code-aware tokenization for BM25 (v1.3 optimized).
+
+        Uses pre-compiled regex patterns for better performance.
+
+        Examples:
+        - "HTTPClient" → ["http", "client"]
+        - "get_user_by_id" → ["get", "user", "by"]
+        - "error 0x884" → ["error", "0x884"]
+
+        Args:
+            text: Input text to tokenize
+
+        Returns:
+            list of tokens (strings)
+        """
+        # Step 1: Split camelCase (using pre-compiled patterns)
+        if BM25_SPLIT_CAMELCASE:
+            text = _CAMEL_CASE_PATTERN_1.sub(' ', text)
+            text = _CAMEL_CASE_PATTERN_2.sub(' ', text)
+
+        # Step 2: Split on underscores and non-alphanumeric
+        if BM25_SPLIT_SNAKE_CASE:
+            text = _UNDERSCORE_PATTERN.sub(' ', text)
+        text = _NON_ALPHANUM_PATTERN.sub(' ', text)
+
+        # Step 3: Lowercase and split
+        tokens = text.lower().split()
+
+        # Step 4: Filter short tokens (but keep hex codes)
+        filtered_tokens = []
+        for t in tokens:
+            if len(t) > BM25_MIN_TOKEN_LENGTH:
+                filtered_tokens.append(t)
+            elif BM25_KEEP_HEX_CODES and t.startswith('0x'):
+                filtered_tokens.append(t)
+
+        return filtered_tokens
 
     @classmethod
     def _get_embedding_model(cls):
@@ -493,8 +551,9 @@ class HybridRetriever:
             SentenceTransformer model instance
         """
         if cls._embedding_model is None:
-            from settings import EMBEDDING_MODEL
             from sentence_transformers import SentenceTransformer
+
+            from settings import EMBEDDING_MODEL
 
             logger.info(f"Loading embedding model: {EMBEDDING_MODEL}")
             cls._embedding_model = SentenceTransformer(EMBEDDING_MODEL)
@@ -534,15 +593,8 @@ class HybridRetriever:
     ) -> list[tuple[str, float]]:
         """Weighted Reciprocal Rank Fusion with k=60 (v1.1).
 
-        v1.1 Update: Weighted RRF favoring semantic search to improve recall
-        for short class signature chunks (which BM25 under-ranks due to length bias).
-
         Formula: RRF_score(chunk) = bm25_weight * sum(1/(k + rank_bm25)) +
                                      vector_weight * sum(1/(k + rank_vector))
-
-        Weighting Rationale:
-        - BM25 (0.4): Good for exact terms, but biased by document length
-        - Vector (1.0): Better for intent, especially for short signature chunks
 
         Args:
             bm25_results: list of (chunk_id, score) from BM25
@@ -552,7 +604,7 @@ class HybridRetriever:
             vector_weight: Weight for Vector contribution (default: 1.0)
 
         Returns:
-            list of (chunk_id, score) tuples sorted by weighted RRF score (highest first)
+            list of (chunk_id, score) tuples sorted by weighted RRF score
         """
         rrf_scores: dict[str, float] = defaultdict(float)
 
@@ -571,66 +623,31 @@ class HybridRetriever:
             reverse=True
         )
 
-        # Return list of (chunk_id, score) tuples for score access
         return ranked_ids
-
-    def _get_chunk_file_paths(
-        self,
-        candidate_ids: list[str]
-    ) -> dict[str, str]:
-        """Get file_path for each chunk ID from metadata index.
-
-        Args:
-            candidate_ids: List of chunk IDs
-
-        Returns:
-            Dict mapping chunk_id -> file_path
-        """
-        chunk_file_paths = {}
-
-        # Build a quick lookup from all metadata
-        for source_type, chunks_meta in self.metadata_index.items():
-            for meta in chunks_meta:
-                if meta.id in candidate_ids:
-                    chunk_file_paths[meta.id] = meta.file_path
-
-        return chunk_file_paths
 
     def _apply_folder_boost(
         self,
         ranked_ids: list[tuple[str, float]],
         folders: list[str],
-        chunk_file_paths: dict[str, str],
         boost_factor: float = 1.3
     ) -> list[tuple[str, float]]:
-        """Apply folder boost to chunks matching inferred folders (v1.2).
+        """Apply folder boost to chunks matching inferred folders (v1.3).
 
-        Chunks whose file_path starts with any of the specified folders
-        get their RRF score multiplied by boost_factor.
-
-        This is SOFT filtering - non-matching chunks are NOT excluded,
-        just ranked lower.
+        Uses pre-built id_to_file_path dict for O(1) lookup.
 
         Args:
             ranked_ids: List of (chunk_id, rrf_score) tuples
-            folders: List of folder prefixes (e.g., ["httpx/_transports/"])
-            chunk_file_paths: Mapping of chunk_id -> file_path
+            folders: List of folder prefixes
             boost_factor: Multiplier for matching chunks (default: 1.3)
 
         Returns:
             Re-sorted list of (chunk_id, boosted_score) tuples
-
-        Example:
-            >>> ranked = [("chunk1", 0.5), ("chunk2", 0.4)]
-            >>> paths = {"chunk1": "httpx/_client.py", "chunk2": "httpx/_transports/base.py"}
-            >>> folders = ["httpx/_transports/"]
-            >>> self._apply_folder_boost(ranked, folders, paths, 1.3)
-            [("chunk2", 0.52), ("chunk1", 0.5)]  # chunk2 boosted and reranked
         """
         boosted_results = []
 
         for chunk_id, score in ranked_ids:
-            file_path = chunk_file_paths.get(chunk_id, "")
+            # v1.3: Use pre-built lookup dict
+            file_path = self.id_to_file_path.get(chunk_id, "")
 
             # Check if file_path matches any folder
             matches_folder = any(
@@ -685,6 +702,11 @@ class HybridRetriever:
         logger.info(f"Retrieved {len(result)} unique chunks from {len(retrieval_requests)} requests")
 
         return result
+
+    def __del__(self):
+        """Cleanup thread pool on deletion."""
+        if hasattr(self, '_executor'):
+            self._executor.shutdown(wait=False)
 
 
 class _MetadataFilterCompat:

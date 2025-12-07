@@ -4,16 +4,21 @@ This module enriches retrieved chunks with parent/sibling/import context to prov
 complete understanding without requiring additional retrieval. Different strategies
 are used for code, markdown, and text chunks.
 
+v1.2 Optimizations:
+- Pre-built lookup dicts for O(1) access instead of O(N) linear scans
+- Indexed by (file_path, parent_context) for method siblings
+- Indexed by (file_path, class_name) for parent class lookup
+
 Author: Hay Hoffman
-Version: 1.1
+Version: 1.2
 """
 
 import logging
+from collections import defaultdict
 
-from settings import MAX_CHILDREN_SECTIONS, MAX_IMPORTS, MAX_RELATED_METHODS
 from models.chunk import BaseChunk, CodeChunk, MarkdownChunk, TextChunk
 from models.retrieval import ExpandedChunk, RetrievedChunk
-
+from settings import MAX_CHILDREN_SECTIONS, MAX_IMPORTS, MAX_RELATED_METHODS
 from src.retrieval.chunk_loader import ChunkLoader
 from src.retrieval.metadata_filter import ChunkMetadata
 
@@ -23,16 +28,23 @@ __all__ = ["ContextExpander"]
 
 
 class ContextExpander:
-    """Expand retrieved chunks with contextual information.
+    """Expand retrieved chunks with contextual information (v1.2 optimized).
 
     Enriches chunks based on their source type:
     - Code: Parent class, sibling methods, imports
     - Markdown: Parent headers, child sections
     - Text: No expansion (self-contained)
 
+    v1.2 Optimizations:
+    - Pre-built lookup dicts for O(1) parent/sibling lookups
+    - No more O(N) linear scans per expansion
+
     Attributes:
         metadata_index: Mapping of source_type -> list of chunk metadata
         chunk_loader: Chunk loader for fetching related chunks
+        _class_lookup: (file_path, class_name) -> ChunkMetadata for parent lookup
+        _methods_by_class: (file_path, parent_context) -> list[ChunkMetadata] for siblings
+        _markdown_children: (file_path, parent_id) -> list[ChunkMetadata] for children
     """
 
     def __init__(
@@ -40,7 +52,7 @@ class ContextExpander:
         metadata_index: dict[str, list[ChunkMetadata]],
         chunk_loader: ChunkLoader
     ):
-        """Initialize context expander.
+        """Initialize context expander with pre-built lookup structures.
 
         Args:
             metadata_index: Metadata index for finding related chunks
@@ -48,6 +60,52 @@ class ContextExpander:
         """
         self.metadata_index = metadata_index
         self.chunk_loader = chunk_loader
+
+        # v1.2: Pre-build lookup structures for O(1) access
+        self._class_lookup: dict[tuple[str, str], ChunkMetadata] = {}
+        self._methods_by_class: dict[tuple[str, str], list[ChunkMetadata]] = defaultdict(list)
+        self._markdown_by_file: dict[str, list[ChunkMetadata]] = defaultdict(list)
+
+        self._build_lookup_structures()
+
+    def _build_lookup_structures(self):
+        """Build pre-computed lookup dicts for O(1) access (v1.2).
+
+        Builds:
+        - _class_lookup: (file_path, class_name) -> class ChunkMetadata
+        - _methods_by_class: (file_path, parent_context) -> list of method ChunkMetadata
+        - _markdown_by_file: file_path -> list of markdown ChunkMetadata (sorted by line)
+        """
+        # Build code lookups
+        if "code" in self.metadata_index:
+            for meta in self.metadata_index["code"]:
+                if meta.chunk_type == "class":
+                    # Class lookup by (file_path, class_name)
+                    key = (meta.file_path, meta.name)
+                    self._class_lookup[key] = meta
+
+                elif meta.chunk_type == "function" and meta.parent_context:
+                    # Methods grouped by (file_path, parent_class)
+                    key = (meta.file_path, meta.parent_context)
+                    self._methods_by_class[key].append(meta)
+
+        # Build markdown lookups
+        if "markdown" in self.metadata_index:
+            for meta in self.metadata_index["markdown"]:
+                self._markdown_by_file[meta.file_path].append(meta)
+
+            # Sort by start_line for efficient child section lookup
+            for file_path in self._markdown_by_file:
+                self._markdown_by_file[file_path].sort(
+                    key=lambda m: m.start_line if m.start_line else 0
+                )
+
+        logger.info(
+            f"Built context expansion lookups: "
+            f"{len(self._class_lookup)} classes, "
+            f"{len(self._methods_by_class)} class->methods groups, "
+            f"{len(self._markdown_by_file)} markdown files"
+        )
 
     def expand(self, retrieved_chunk: RetrievedChunk) -> ExpandedChunk | None:
         """Expand a retrieved chunk with context.
@@ -80,12 +138,9 @@ class ContextExpander:
         retrieved_chunk: RetrievedChunk,
         chunk: CodeChunk
     ) -> ExpandedChunk:
-        """Expand code chunk with parent class, siblings, and imports.
+        """Expand code chunk with parent class, siblings, and imports (v1.2 optimized).
 
-        Context hierarchy:
-        1. Parent class (if method)
-        2. Related methods (same class, up to MAX_RELATED_METHODS)
-        3. Import statements (up to MAX_IMPORTS)
+        Uses pre-built lookup dicts for O(1) access.
 
         Args:
             retrieved_chunk: Retrieved chunk
@@ -98,24 +153,23 @@ class ContextExpander:
         sibling_chunks: list[BaseChunk] = []
         import_chunks: list[BaseChunk] = []
 
-        # 1. Find parent class (if this is a method)
+        # 1. Find parent class using lookup dict (O(1))
         if chunk.parent_context and chunk.chunk_type == "function":
-            parent_chunk = self._find_parent_class(chunk)
+            parent_chunk = self._find_parent_class_optimized(chunk)
             if parent_chunk:
                 logger.debug(
                     f"Found parent class '{parent_chunk.name}' for method '{chunk.name}'"
                 )
 
-        # 2. Find sibling methods (other methods in same class)
+        # 2. Find sibling methods using lookup dict (O(1) lookup + O(siblings))
         if chunk.parent_context:
-            siblings = self._find_sibling_methods(chunk)
-            sibling_chunks = list(siblings)  # Cast to list[BaseChunk]
+            siblings = self._find_sibling_methods_optimized(chunk)
+            sibling_chunks = list(siblings)
             logger.debug(
                 f"Found {len(sibling_chunks)} sibling methods for '{chunk.name}'"
             )
 
         # 3. Find imported chunks (not implemented - would require import resolution)
-        # For now, we just log the imports that are present
         if chunk.imports:
             logger.debug(
                 f"Chunk '{chunk.name}' has {len(chunk.imports)} imports "
@@ -141,12 +195,9 @@ class ContextExpander:
         retrieved_chunk: RetrievedChunk,
         chunk: MarkdownChunk
     ) -> ExpandedChunk:
-        """Expand markdown chunk with child sections.
+        """Expand markdown chunk with child sections (v1.2 optimized).
 
-        Context hierarchy:
-        1. Child sections (up to MAX_CHILDREN_SECTIONS)
-
-        Note: Parent headers are already in chunk.headers dict
+        Uses pre-built lookup dicts for faster child lookup.
 
         Args:
             retrieved_chunk: Retrieved chunk
@@ -157,10 +208,10 @@ class ContextExpander:
         """
         child_sections: list[BaseChunk] = []
 
-        # Find child sections (subsections under this header)
+        # Find child sections using pre-sorted file index
         if chunk.heading_level is not None:
-            children = self._find_child_sections(chunk)
-            child_sections = list(children)  # Cast to list[BaseChunk]
+            children = self._find_child_sections_optimized(chunk)
+            child_sections = list(children)
             logger.debug(
                 f"Found {len(child_sections)} child sections for '{chunk.name}'"
             )
@@ -200,8 +251,10 @@ class ContextExpander:
             }
         )
 
-    def _find_parent_class(self, chunk: CodeChunk) -> CodeChunk | None:
-        """Find parent class by name in same file.
+    def _find_parent_class_optimized(self, chunk: CodeChunk) -> CodeChunk | None:
+        """Find parent class using pre-built lookup dict (v1.2 optimized).
+
+        O(1) lookup instead of O(N) scan.
 
         Args:
             chunk: Code chunk (method) to find parent for
@@ -209,24 +262,23 @@ class ContextExpander:
         Returns:
             Parent class chunk or None if not found
         """
-        if "code" not in self.metadata_index:
-            return None
+        key = (chunk.file_path, chunk.parent_context)
+        meta = self._class_lookup.get(key)
 
-        for meta in self.metadata_index["code"]:
-            if (meta.chunk_type == "class" and
-                meta.name == chunk.parent_context and
-                meta.file_path == chunk.file_path):
-                try:
-                    parent = self.chunk_loader.load_chunk(meta.id)
-                    if isinstance(parent, CodeChunk):
-                        return parent
-                except Exception as e:
-                    logger.error(f"Failed to load parent class {meta.id}: {e}")
+        if meta:
+            try:
+                parent = self.chunk_loader.load_chunk(meta.id)
+                if isinstance(parent, CodeChunk):
+                    return parent
+            except Exception as e:
+                logger.error(f"Failed to load parent class {meta.id}: {e}")
 
         return None
 
-    def _find_sibling_methods(self, chunk: CodeChunk) -> list[CodeChunk]:
-        """Find other methods in same class.
+    def _find_sibling_methods_optimized(self, chunk: CodeChunk) -> list[CodeChunk]:
+        """Find sibling methods using pre-built lookup dict (v1.2 optimized).
+
+        O(1) lookup + O(siblings) iteration instead of O(N) scan.
 
         Args:
             chunk: Code chunk to find siblings for
@@ -236,14 +288,11 @@ class ContextExpander:
         """
         siblings: list[CodeChunk] = []
 
-        if "code" not in self.metadata_index:
-            return siblings
+        key = (chunk.file_path, chunk.parent_context)
+        sibling_metas = self._methods_by_class.get(key, [])
 
-        for meta in self.metadata_index["code"]:
-            if (meta.chunk_type == "function" and
-                meta.parent_context == chunk.parent_context and
-                meta.file_path == chunk.file_path and
-                meta.id != chunk.id):  # Exclude self
+        for meta in sibling_metas:
+            if meta.id != chunk.id:  # Exclude self
                 try:
                     sibling = self.chunk_loader.load_chunk(meta.id)
                     if isinstance(sibling, CodeChunk):
@@ -253,8 +302,10 @@ class ContextExpander:
 
         return siblings
 
-    def _find_child_sections(self, chunk: MarkdownChunk) -> list[MarkdownChunk]:
-        """Find child sections (deeper heading levels in same file).
+    def _find_child_sections_optimized(self, chunk: MarkdownChunk) -> list[MarkdownChunk]:
+        """Find child sections using pre-sorted file index (v1.2 optimized).
+
+        Uses pre-sorted markdown index for more efficient lookup.
 
         Args:
             chunk: Markdown chunk to find children for
@@ -264,23 +315,20 @@ class ContextExpander:
         """
         children: list[MarkdownChunk] = []
 
-        if "markdown" not in self.metadata_index:
+        if chunk.heading_level is None or chunk.start_line is None or chunk.end_line is None:
             return children
 
-        if chunk.heading_level is None:
-            return children
+        # Get pre-sorted markdown sections for this file
+        file_sections = self._markdown_by_file.get(chunk.file_path, [])
 
-        for meta in self.metadata_index["markdown"]:
-            # Child must be in same file and have deeper heading level
-            if (meta.file_path == chunk.file_path and
-                meta.heading_level is not None and
+        for meta in file_sections:
+            # Child must have deeper heading level and be within parent's line range
+            if (meta.heading_level is not None and
                 meta.heading_level > chunk.heading_level and
                 meta.start_line is not None and
                 meta.end_line is not None and
-                chunk.start_line is not None and
-                chunk.end_line is not None and
                 meta.start_line > chunk.start_line and
-                meta.end_line < chunk.end_line):
+                meta.end_line <= chunk.end_line):
                 try:
                     child = self.chunk_loader.load_chunk(meta.id)
                     if isinstance(child, MarkdownChunk):
@@ -289,6 +337,19 @@ class ContextExpander:
                     logger.error(f"Failed to load child section {meta.id}: {e}")
 
         return children
+
+    # Keep original methods for backward compatibility (deprecated)
+    def _find_parent_class(self, chunk: CodeChunk) -> CodeChunk | None:
+        """Find parent class by name in same file (deprecated - use _find_parent_class_optimized)."""
+        return self._find_parent_class_optimized(chunk)
+
+    def _find_sibling_methods(self, chunk: CodeChunk) -> list[CodeChunk]:
+        """Find other methods in same class (deprecated - use _find_sibling_methods_optimized)."""
+        return self._find_sibling_methods_optimized(chunk)
+
+    def _find_child_sections(self, chunk: MarkdownChunk) -> list[MarkdownChunk]:
+        """Find child sections (deprecated - use _find_child_sections_optimized)."""
+        return self._find_child_sections_optimized(chunk)
 
     def expand_batch(
         self,

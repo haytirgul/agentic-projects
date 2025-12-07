@@ -19,7 +19,7 @@ from settings import (
 )
 
 from src.agent.state import AgentState
-from src.retrieval import ChunkLoader, ContextExpander, HybridRetriever
+from src.retrieval import ContextExpander, HybridRetriever
 
 __all__ = ["retrieval_node"]
 
@@ -31,7 +31,10 @@ _expander = None
 
 
 def _initialize_retrieval_components():
-    """Initialize retrieval components (called once at startup)."""
+    """Initialize retrieval components (called once at startup).
+
+    v1.3 Optimization: Reuse chunk_loader from retriever instead of creating duplicate.
+    """
     global _retriever, _expander
 
     if _retriever is not None:
@@ -49,12 +52,10 @@ def _initialize_retrieval_components():
             vector_weight=RRF_VECTOR_WEIGHT,
         )
 
-        # Initialize context expander
-        chunk_loader = ChunkLoader(chunks_dir=CHUNKS_DIR)
-        metadata_index = _retriever.metadata_filter.metadata_index
+        # v1.3: Reuse chunk_loader from retriever (avoid duplicate loading)
         _expander = ContextExpander(
-            metadata_index=metadata_index,
-            chunk_loader=chunk_loader,
+            metadata_index=_retriever.metadata_filter.metadata_index,
+            chunk_loader=_retriever.chunk_loader,  # Reuse instead of creating new
         )
 
         logger.info("[SUCCESS] Retrieval components initialized")
