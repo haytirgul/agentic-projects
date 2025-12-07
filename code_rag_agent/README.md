@@ -155,7 +155,49 @@ Agent: HTTPX employs several design patterns throughout its codebase:
 4. Middleware Chain for authentication (httpx/_auth.py:89)...
 ```
 
-### Example 5: Out-of-Scope Detection
+### Example 5: Complex Query (Multiple Retrievals)
+
+```
+You: How does HTTPX implement both sync and async HTTP/2 support?
+
+Agent: This is a complex question requiring multiple pieces of information. Let me
+retrieve from different parts of the codebase:
+
+[Router decomposes into 2 retrieval requests:]
+1. Query: "HTTP/2 protocol implementation sync"
+   Source: code + markdown
+   Folders: httpx/, docs/
+
+2. Query: "AsyncClient HTTP/2 async transport"
+   Source: code
+   Folders: httpx/_transports/
+
+Results:
+
+1. HTTP/2 Protocol Support (httpx/_transports/default.py:45):
+   - HTTPX uses httpcore for HTTP/2 framing
+   - Connection pooling handles multiplexed streams
+
+       class HTTPTransport:
+           def __init__(self, http2: bool = False):
+               self._pool = httpcore.ConnectionPool(http2=http2)
+
+2. Async HTTP/2 (httpx/_transports/default.py:156):
+   - AsyncHTTPTransport wraps httpcore's async pool
+   - Supports concurrent requests over single connection
+
+       class AsyncHTTPTransport:
+           async def handle_async_request(self, request):
+               return await self._pool.handle_async_request(...)
+
+3. Configuration (docs/http2.md):
+   - Enable via: httpx.Client(http2=True)
+   - Requires httpcore[http2] extra dependency
+
+[Citations: httpx/_transports/default.py:45, httpx/_transports/default.py:156, docs/http2.md]
+```
+
+### Example 6: Out-of-Scope Detection
 
 ```
 You: My GitHubClient().fetch_repos() is returning an empty list, what's wrong?
@@ -173,7 +215,7 @@ How I can help:
 Please rephrase your question to be about HTTPX specifically.
 ```
 
-### Example 6: General Programming Questions
+### Example 7: General Programming Questions
 
 ```
 You: What is a context manager in Python?
@@ -201,7 +243,7 @@ Common Use Cases:
 Tip: Ask me about how HTTPX uses context managers for connection management!
 ```
 
-### Example 7: Conversation History
+### Example 8: Conversation History
 
 ```
 You: What did we discuss earlier?
@@ -240,37 +282,40 @@ Turn 3:
 │    (Intent Classification: history/follow-up/new/out-of-scope)  │
 └─────────────────────────────────────────────────────────────────┘
                                │
-              ┌────────────────┼────────────────┐
-              │                │                │
-              ▼                ▼                ▼
-     ┌──────────────┐  ┌──────────────┐  ┌──────────────┐
-     │   History    │  │  Synthesis   │  │    Router    │
-     │   Response   │  │ (No Retrieval│  │   (Query     │
-     │              │  │   Needed)    │  │ Decomposition│
-     └──────────────┘  └──────────────┘  └──────────────┘
-                                                │
-                                                ▼
-                               ┌─────────────────────────────────┐
-                               │         Hybrid Retrieval        │
-                               │   ┌─────────┐   ┌─────────┐     │
-                               │   │  BM25   │ + │  FAISS  │     │
-                               │   │ (0.4w)  │   │ (1.0w)  │     │
-                               │   └─────────┘   └─────────┘     │
-                               │         ↓ RRF Fusion ↓          │
-                               │      Context Expansion          │
-                               └─────────────────────────────────┘
-                                                │
-                                                ▼
-                               ┌─────────────────────────────────┐
-                               │          Synthesis              │
-                               │   (Streaming + Citations)       │
-                               └─────────────────────────────────┘
-                                                │
-                                                ▼
-                               ┌─────────────────────────────────┐
-                               │      Conversation Memory        │
-                               │     (Save Turn + Loop)          │
-                               └─────────────────────────────────┘
+       ┌───────────────────────┼───────────────────────┐
+       │                       │                       │
+       ▼                       ▼                       ▼
+┌──────────────┐       ┌──────────────┐       ┌──────────────┐
+│  Synthesis   │       │  Synthesis   │       │    Router    │
+│  (history/   │       │  (general/   │       │   (Query     │
+│  out_of_scope│       │  follow_up)  │       │ Decomposition│
+│  responses)  │       │              │       │              │
+└──────────────┘       └──────────────┘       └──────────────┘
+       │                       │                       │
+       │                       │                       ▼
+       │                       │       ┌─────────────────────────────────┐
+       │                       │       │         Hybrid Retrieval        │
+       │                       │       │   ┌─────────┐   ┌─────────┐     │
+       │                       │       │   │  BM25   │ + │  FAISS  │     │
+       │                       │       │   │ (0.4w)  │   │ (1.0w)  │     │
+       │                       │       │   └─────────┘   └─────────┘     │
+       │                       │       │         ↓ RRF Fusion ↓          │
+       │                       │       │      Context Expansion          │
+       │                       │       └─────────────────────────────────┘
+       │                       │                       │
+       │                       │                       ▼
+       │                       │       ┌─────────────────────────────────┐
+       │                       │       │          Synthesis              │
+       │                       │       │   (Streaming + Citations)       │
+       │                       │       └─────────────────────────────────┘
+       │                       │                       │
+       └───────────────────────┴───────────────────────┘
+                               │
+                               ▼
+               ┌─────────────────────────────────────┐
+               │        Conversation Memory          │
+               │        (Save Turn + Loop)           │
+               └─────────────────────────────────────┘
 ```
 
 ## Project Structure
@@ -278,7 +323,7 @@ Turn 3:
 ```
 code_rag_agent/
 ├── app.py                    # Interactive chatbot entry point
-├── settings.py               # Configuration (system + user)
+├── settings.py               # Configuration (paths, models, thresholds)
 ├── init_project.py           # First-time setup automation
 ├── requirements.txt          # Python dependencies
 │
@@ -296,10 +341,12 @@ code_rag_agent/
 │   │       └── conversation_memory.py
 │   │
 │   ├── retrieval/
-│   │   ├── hybrid_retriever.py   # BM25 + FAISS fusion
-│   │   ├── faiss_store.py        # Vector database
+│   │   ├── hybrid_retriever.py   # BM25 + FAISS fusion with RRF
+│   │   ├── faiss_store.py        # FAISS vector database
 │   │   ├── chunk_loader.py       # Load processed chunks
-│   │   └── context_expander.py   # Parent/sibling expansion
+│   │   ├── context_expander.py   # Parent/sibling expansion
+│   │   ├── fast_path_router.py   # Regex-based fast routing
+│   │   └── metadata_filter.py    # Filter by source_type, folders
 │   │
 │   ├── llm/
 │   │   ├── llm.py            # LLM factory with caching
@@ -307,32 +354,39 @@ code_rag_agent/
 │   │
 │   └── security/
 │       ├── prompt_guard.py   # DeBERTa classifier
-│       └── validator.py      # Input validation
+│       ├── validator.py      # Input validation
+│       └── exceptions.py     # Security exceptions
 │
 ├── models/                   # Pydantic data models
 │   ├── chunk.py              # BaseChunk schema
 │   ├── retrieval.py          # RouterOutput, RetrievedChunk
-│   ├── intent.py             # Intent classification
-│   └── conversation.py       # Conversation turn
+│   ├── synthesis.py          # SynthesisResponse, Citation
+│   ├── intent.py             # QueryIntent classification
+│   └── conversation.py       # ConversationTurn
 │
 ├── prompts/                  # LLM prompt templates
-│   ├── router_prompt.py
-│   ├── synthesis_prompt.py
-│   └── intent_prompt.py
+│   ├── router_prompt.py      # Query decomposition prompt
+│   ├── synthesis_prompt.py   # Answer generation prompt
+│   └── intent_prompt.py      # Intent classification prompt
 │
 ├── scripts/data_pipeline/
 │   ├── ingestion/
 │   │   └── clone_httpx_repo.py
 │   ├── processing/
 │   │   ├── process_all_files.py
-│   │   ├── chunk_code.py
-│   │   └── process_markdown.py
+│   │   ├── chunk_code.py         # AST-based code chunking
+│   │   ├── process_markdown.py   # Header-aware markdown chunking
+│   │   ├── process_text_files.py # Config file chunking
+│   │   └── utils.py              # Token counting utilities
 │   └── indexing/
 │       ├── build_all_indices.py
 │       ├── build_faiss_index.py
 │       └── build_bm25_index.py
 │
-├── data/
+├── tests/
+│   └── test_processing_pipeline.py
+│
+├── data/                     # (gitignored)
 │   ├── httpx/                # Cloned HTTPX source
 │   ├── processed/            # JSON chunk files
 │   ├── index/                # FAISS indices
