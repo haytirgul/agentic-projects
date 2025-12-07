@@ -33,7 +33,6 @@ load_dotenv()
 PROJECT_ROOT = Path(__file__).parent
 DATA_DIR = PROJECT_ROOT / "data"
 INDEX_DIR = DATA_DIR / "index"
-VECTOR_DB_DIR = DATA_DIR / "vector_db"
 RAG_COMPONENTS_DIR = DATA_DIR / "rag_components"
 
 # Output file paths
@@ -148,7 +147,7 @@ LANGCHAIN_ENDPOINT: str = os.getenv("LANGCHAIN_ENDPOINT", "https://api.smith.lan
 
 # Model tiers (can override via env)
 # Note: gemini-2.0-flash has higher free tier limits (1500 RPD vs 20 RPD for flash-lite)
-MODEL_FAST: str = os.getenv("MODEL_FAST", "gemini-2.0-flash")
+MODEL_FAST: str = os.getenv("MODEL_FAST", "gemini-2.0-flash-lite")
 MODEL_INTERMEDIATE: str = os.getenv("MODEL_INTERMEDIATE", "gemini-2.0-flash")
 MODEL_SLOW: str = os.getenv("MODEL_SLOW", "gemini-2.5-pro")
 
@@ -188,7 +187,7 @@ LLM_TOP_K: int = int(os.getenv("LLM_TOP_K", "40"))
 
 INTENT_MODEL: str = MODEL_FAST  # Use fast model for intent classification
 INTENT_TEMPERATURE: float = float(os.getenv("INTENT_TEMPERATURE", "0.0"))
-INTENT_MAX_TOKENS: int = int(os.getenv("INTENT_MAX_TOKENS", "1000"))
+INTENT_MAX_TOKENS: int = int(os.getenv("INTENT_MAX_TOKENS", "1024"))
 
 # -----------------------------------------------------------------------------
 # Router Configuration
@@ -263,14 +262,6 @@ CHUNK_OVERLAP_MARKDOWN: int = CHUNK_OVERLAP  # For markdown recursive splits
 # -----------------------------------------------------------------------------
 
 HTTPX_REPO_DIR: Path = DATA_DIR / os.getenv("HTTPX_REPO_DIR", "httpx")
-
-# -----------------------------------------------------------------------------
-# Vector Store Configuration
-# -----------------------------------------------------------------------------
-
-VECTOR_DB_COLLECTION_NAME: str = os.getenv("VECTOR_DB_COLLECTION_NAME", "code_chunks")
-VECTOR_DB_PERSIST_DIRECTORY: str = str(VECTOR_DB_DIR)
-
 # -----------------------------------------------------------------------------
 # Conversation Memory
 # -----------------------------------------------------------------------------
@@ -315,7 +306,6 @@ VERBOSE_OUTPUT: bool = os.getenv("VERBOSE_OUTPUT", "false").lower() == "true"
 # Ensure directories exist
 HTTPX_REPO_DIR.mkdir(parents=True, exist_ok=True)
 INDEX_DIR.mkdir(parents=True, exist_ok=True)
-VECTOR_DB_DIR.mkdir(parents=True, exist_ok=True)
 RAG_COMPONENTS_DIR.mkdir(parents=True, exist_ok=True)
 (DATA_DIR / "processed").mkdir(parents=True, exist_ok=True)
 
@@ -414,9 +404,6 @@ __all__ = [
     "CHUNK_OVERLAP_MARKDOWN",
     # Repository
     "HTTPX_REPO_DIR",
-    # Vector Store
-    "VECTOR_DB_COLLECTION_NAME",
-    "VECTOR_DB_PERSIST_DIRECTORY",
     # Conversation
     "MAX_HISTORY_TURNS",
     "ENABLE_CONVERSATION_MEMORY",
