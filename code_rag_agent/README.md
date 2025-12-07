@@ -53,22 +53,20 @@ python app.py
 ```
 You: How does httpx.Client handle connection pooling?
 
-Agent: HTTPX's `Client` class manages connection pooling through the `HTTPTransport`
+Agent: HTTPX's Client class manages connection pooling through the HTTPTransport
 layer. Here's how it works:
 
-1. **Connection Pool Creation**: When you create a `Client`, it initializes an
-   `HTTPTransport` with configurable limits (`httpx/_client.py:127`):
+1. Connection Pool Creation: When you create a Client, it initializes an
+   HTTPTransport with configurable limits (httpx/_client.py:127):
 
-   ```python
-   transport = HTTPTransport(
-       limits=Limits(max_keepalive_connections=20, max_connections=100)
-   )
-   ```
+       transport = HTTPTransport(
+           limits=Limits(max_keepalive_connections=20, max_connections=100)
+       )
 
-2. **Connection Reuse**: The transport maintains a pool of keep-alive connections
-   that are reused across requests (`httpx/_transports/default.py:89`)...
+2. Connection Reuse: The transport maintains a pool of keep-alive connections
+   that are reused across requests (httpx/_transports/default.py:89)...
 
-[Citations in green: (`httpx/_client.py:127`), (`httpx/_transports/default.py:89`)]
+[Citations: httpx/_client.py:127, httpx/_transports/default.py:89]
 ```
 
 ### Example 2: Debugging HTTPX Code
@@ -83,22 +81,20 @@ You: I'm getting a 401 error with this code:
 Agent: The 401 Unauthorized error indicates authentication failure. Looking at
 HTTPX's authentication flow:
 
-1. **BasicAuth Encoding**: HTTPX encodes credentials using `httpx.BasicAuth`
-   (`httpx/_auth.py:45`):
+1. BasicAuth Encoding: HTTPX encodes credentials using httpx.BasicAuth
+   (httpx/_auth.py:45):
 
-   ```python
-   class BasicAuth:
-       def __init__(self, username, password):
-           self._auth_header = self._build_auth_header(username, password)
-   ```
+       class BasicAuth:
+           def __init__(self, username, password):
+               self._auth_header = self._build_auth_header(username, password)
 
-2. **Header Injection**: The auth header is added to the request
-   (`httpx/_client.py:892`)...
+2. Header Injection: The auth header is added to the request
+   (httpx/_client.py:892)...
 
-**Troubleshooting Steps:**
+Troubleshooting Steps:
 - Verify your credentials are correct
 - Check if the API uses a different auth scheme (Bearer, Digest, etc.)
-- Inspect the response headers for `WWW-Authenticate` hints
+- Inspect the response headers for WWW-Authenticate hints
 ```
 
 ### Example 3: Follow-up Questions
@@ -106,35 +102,30 @@ HTTPX's authentication flow:
 ```
 You: How does AsyncClient differ from Client?
 
-Agent: The key differences between `AsyncClient` and `Client` are:
+Agent: The key differences between AsyncClient and Client are:
 
-1. **Async/Await Pattern**: `AsyncClient` uses async methods
-   (`httpx/_client.py:1156`):
+1. Async/Await Pattern: AsyncClient uses async methods (httpx/_client.py:1156):
 
-   ```python
-   async def get(self, url, **kwargs):
-       return await self.request("GET", url, **kwargs)
-   ```
+       async def get(self, url, **kwargs):
+           return await self.request("GET", url, **kwargs)
 
-2. **Transport Layer**: Uses `AsyncHTTPTransport` with asyncio
-   (`httpx/_transports/asgi.py:23`)...
+2. Transport Layer: Uses AsyncHTTPTransport with asyncio
+   (httpx/_transports/asgi.py:23)...
 
 You: Show me how it handles timeouts
 
-Agent: Building on `AsyncClient`, here's how timeouts work:
+Agent: Building on AsyncClient, here's how timeouts work:
 
-1. **Timeout Configuration** (from previous context - `AsyncClient`):
+1. Timeout Configuration (from previous context - AsyncClient):
 
-   ```python
-   async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as client:
-       response = await client.get(url)
-   ```
+       async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as client:
+           response = await client.get(url)
 
-2. **Timeout Implementation** (`httpx/_config.py:78`):
-   - `connect`: Time to establish connection
-   - `read`: Time to receive response
-   - `write`: Time to send request
-   - `pool`: Time to acquire connection from pool...
+2. Timeout Implementation (httpx/_config.py:78):
+   - connect: Time to establish connection
+   - read: Time to receive response
+   - write: Time to send request
+   - pool: Time to acquire connection from pool...
 ```
 
 ### Example 4: Code Architecture Questions
@@ -144,26 +135,24 @@ You: What design patterns does HTTPX use?
 
 Agent: HTTPX employs several design patterns throughout its codebase:
 
-1. **Context Manager Pattern** (`httpx/_client.py:201`):
-   ```python
-   class Client:
-       def __enter__(self):
-           return self
-       def __exit__(self, *args):
-           self.close()
-   ```
+1. Context Manager Pattern (httpx/_client.py:201):
 
-2. **Transport Abstraction** (`httpx/_transports/base.py:15`):
-   - `BaseTransport` defines the interface
-   - `HTTPTransport`, `ASGITransport`, `WSGITransport` implement it
+       class Client:
+           def __enter__(self):
+               return self
+           def __exit__(self, *args):
+               self.close()
 
-3. **Builder Pattern** for requests (`httpx/_models.py:312`):
-   ```python
-   request = Request("GET", url)
-   request = request.with_headers({"X-Custom": "value"})
-   ```
+2. Transport Abstraction (httpx/_transports/base.py:15):
+   - BaseTransport defines the interface
+   - HTTPTransport, ASGITransport, WSGITransport implement it
 
-4. **Middleware Chain** for authentication (`httpx/_auth.py:89`)...
+3. Builder Pattern for requests (httpx/_models.py:312):
+
+       request = Request("GET", url)
+       request = request.with_headers({"X-Custom": "value"})
+
+4. Middleware Chain for authentication (httpx/_auth.py:89)...
 ```
 
 ### Example 5: Out-of-Scope Detection
@@ -171,13 +160,13 @@ Agent: HTTPX employs several design patterns throughout its codebase:
 ```
 You: My GitHubClient().fetch_repos() is returning an empty list, what's wrong?
 
-Agent: I can only help with questions about the **HTTPX Python library**.
+Agent: I can only help with questions about the HTTPX Python library.
 
 Your query appears to involve code that doesn't use HTTPX (e.g., custom clients,
 requests, aiohttp, or other HTTP libraries).
 
-**How I can help:**
-- Questions about `httpx.Client`, `httpx.AsyncClient`, and their methods
+How I can help:
+- Questions about httpx.Client, httpx.AsyncClient, and their methods
 - Understanding HTTPX internals, connection pooling, timeouts
 - Debugging code that uses HTTPX classes and functions
 
@@ -192,25 +181,24 @@ You: What is a context manager in Python?
 Agent: A context manager is a Python object that defines `__enter__` and `__exit__`
 methods, enabling the `with` statement pattern for resource management.
 
-**Basic Structure:**
-```python
-class MyContextManager:
-    def __enter__(self):
-        # Setup: acquire resource
-        return self
+Basic Structure:
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        # Cleanup: release resource
-        pass
-```
+    class MyContextManager:
+        def __enter__(self):
+            # Setup: acquire resource
+            return self
 
-**Common Use Cases:**
-- File handling: `with open('file.txt') as f:`
+        def __exit__(self, exc_type, exc_val, exc_tb):
+            # Cleanup: release resource
+            pass
+
+Common Use Cases:
+- File handling: with open('file.txt') as f:
 - Database connections
 - HTTP clients (like HTTPX!)
 - Locks and threading
 
-*Tip: Ask me about how HTTPX uses context managers for connection management!*
+Tip: Ask me about how HTTPX uses context managers for connection management!
 ```
 
 ### Example 7: Conversation History
@@ -220,15 +208,15 @@ You: What did we discuss earlier?
 
 Agent: Here's a summary of our conversation:
 
-**Turn 1:**
+Turn 1:
 - Question: How does httpx.Client handle connection pooling?
 - Answer: HTTPX's Client manages connection pooling through HTTPTransport...
 
-**Turn 2:**
+Turn 2:
 - Question: Show me the timeout configuration
 - Answer: Timeouts are configured via httpx.Timeout with connect, read, write...
 
-**Turn 3:**
+Turn 3:
 - Question: What design patterns does HTTPX use?
 - Answer: HTTPX uses Context Manager, Transport Abstraction, Builder patterns...
 ```
