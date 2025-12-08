@@ -5,7 +5,6 @@ including router prompts for query decomposition, synthesis prompts
 for answer generation, and intent prompts for query classification.
 
 Author: Hay Hoffman
-Version: 1.2
 """
 
 from prompts.intent_prompt import (

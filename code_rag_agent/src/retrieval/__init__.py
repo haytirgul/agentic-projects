@@ -12,7 +12,6 @@ RETRIEVAL_ARCHITECTURE.md v1.1, including:
 - Context expansion with parent/sibling/import enrichment
 
 Author: Hay Hoffman
-Version: 1.1
 """
 
 from src.retrieval.chunk_loader import ChunkLoader

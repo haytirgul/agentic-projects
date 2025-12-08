@@ -3,7 +3,6 @@
 This module contains routing logic that determines which node to execute next
 based on the current state of the graph.
 
-Architecture Version: 1.2
 Author: Hay Hoffman
 """
 
@@ -54,9 +53,10 @@ def route_after_input_preprocessor(state: AgentState) -> str:
         state: Current graph state with is_history_query, is_out_of_scope, is_general_question, needs_retrieval flags
 
     Returns:
-        "conversation_memory" if history query or out_of_scope (final_answer set),
+        "conversation_memory" if history query (final_answer set),
         "synthesis" if general question or follow_up with sufficient history (needs_retrieval=False),
         "router" otherwise (needs fresh retrieval)
+        "security_gateway" if out_of_scope (route back to graph start)
 
     Example:
         >>> state = {"is_history_query": True}
@@ -65,7 +65,7 @@ def route_after_input_preprocessor(state: AgentState) -> str:
 
         >>> state = {"is_out_of_scope": True}
         >>> route_after_input_preprocessor(state)
-        "conversation_memory"
+        "security_gateway"
 
         >>> state = {"is_general_question": True, "needs_retrieval": False}
         >>> route_after_input_preprocessor(state)
@@ -89,8 +89,8 @@ def route_after_input_preprocessor(state: AgentState) -> str:
         return "conversation_memory"
 
     if is_out_of_scope:
-        logger.info("Out of scope query (non-HTTPX code) - skipping to conversation_memory")
-        return "conversation_memory"
+        logger.info("Out of scope query (non-HTTPX code) - routing to graph start")
+        return "security_gateway"
 
     if is_general_question:
         logger.info("General question detected - skipping to synthesis (no retrieval needed)")
@@ -106,20 +106,17 @@ def route_after_input_preprocessor(state: AgentState) -> str:
 
 
 def route_after_conversation_memory(state: AgentState) -> str:
-    """Route after conversation_memory: restart or end.
+    """Route after conversation_memory: always end (chatbot mode).
+
+    v1.3: With LangGraph's add_messages and MemorySaver, each invoke() is
+    a single turn. The chatbot loop handles multi-turn by calling invoke()
+    repeatedly with the same thread_id. We always return END here.
 
     Args:
-        state: Current graph state with continue_conversation flag
+        state: Current graph state (unused, always ends)
 
     Returns:
-        "security_gateway" if continuing (new query needs validation),
-        "END" otherwise
+        "END" - each invoke() is a single turn
     """
-    continue_conv = state.get("continue_conversation", False)
-
-    if continue_conv:
-        logger.debug("Continuing conversation, routing to security_gateway")
-        return "security_gateway"
-
-    logger.debug("Ending conversation")
+    logger.debug("Turn complete, ending graph (chatbot will handle next turn)")
     return "END"

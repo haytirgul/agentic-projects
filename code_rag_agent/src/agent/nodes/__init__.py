@@ -9,12 +9,11 @@ This module exports all graph nodes:
 - conversation_memory: Manages turn history and state
 
 Author: Hay Hoffman
-Version: 1.2
 """
 
 from src.agent.nodes.conversation_memory import conversation_memory_node
 from src.agent.nodes.input_preprocessor import input_preprocessor_node
-from src.agent.nodes.retrieval import retrieval_node
+from src.agent.nodes.retrieval import initialize_retrieval, retrieval_node
 from src.agent.nodes.router import router_node
 from src.agent.nodes.security_gateway import security_gateway_node
 from src.agent.nodes.synthesis import synthesis_node
@@ -24,6 +23,7 @@ __all__ = [
     "input_preprocessor_node",
     "router_node",
     "retrieval_node",
+    "initialize_retrieval",
     "synthesis_node",
     "conversation_memory_node",
 ]

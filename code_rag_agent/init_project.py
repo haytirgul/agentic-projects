@@ -14,7 +14,6 @@ Run this after cloning the repository:
     python init_project.py
 
 Author: Hay Hoffman
-Version: 1.2
 """
 
 import logging
@@ -121,14 +120,17 @@ class ProjectInitializer:
                     logger.info(f"  - {line}")
 
         try:
-            results = subprocess.run(
-                [sys.executable, "-m", "pip", "install", "-r", "requirements.txt"],
+            subprocess.run(
+                [sys.executable, "-m", "pip", "install", "-r", "requirements.txt", "-q"],
                 check=True,
                 cwd=self.project_root,
+                capture_output=True,
             )
             success = True
         except subprocess.CalledProcessError as e:
             logger.error(f"Failed to install dependencies (exit code: {e.returncode})")
+            if e.stderr:
+                logger.error(f"Error output: {e.stderr.decode()}")
             success = False
 
         if success:

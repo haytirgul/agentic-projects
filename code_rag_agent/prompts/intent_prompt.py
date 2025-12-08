@@ -6,7 +6,6 @@ used when regex patterns don't match and conversation history exists.
 Uses string.Template for safe substitution.
 
 Author: Hay Hoffman
-Version: 1.0
 """
 
 from string import Template
@@ -82,48 +81,56 @@ CURRENT QUERY: "$user_query"
 Classify the intent and resolve any references to previous context.""")
 
 
-def _format_history_for_intent(conversation_history: list[dict[str, Any]]) -> str:
+def _format_history_for_intent(messages: list[Any] | None) -> str:
     """Format conversation history for intent classification context.
 
+    v1.1: Now accepts LangGraph messages (HumanMessage/AIMessage) instead of dicts.
+
     Args:
-        conversation_history: list of previous Q&A turns
+        messages: List of BaseMessage objects from LangGraph state
 
     Returns:
-        Formatted history string (last 3 turns)
+        Formatted history string (last 10 messages = 5 turns)
     """
-    if not conversation_history:
+    if not messages:
         return "No previous conversation."
 
-    # Only include last 3 turns for context
-    recent_turns = conversation_history[-5:]
+    # Only include last 10 messages (5 Q&A turns) for context
+    recent_messages = messages[-10:]
     history_parts = []
 
-    for i, turn in enumerate(recent_turns, 1):
-        query = turn.get("query", "")
-        answer = turn.get("answer", "")
-        # Truncate long answers
-        answer_preview = answer[:300] + "..." if len(answer) > 300 else answer
-        history_parts.append(f"Turn {i}:")
-        history_parts.append(f"  User: {query}")
-        history_parts.append(f"  Assistant: {answer_preview}")
+    turn_num = 0
+    for i in range(0, len(recent_messages), 2):
+        turn_num += 1
+        user_msg = recent_messages[i] if i < len(recent_messages) else None
+        ai_msg = recent_messages[i + 1] if i + 1 < len(recent_messages) else None
+
+        history_parts.append(f"Turn {turn_num}:")
+        if user_msg:
+            history_parts.append(f"  User: {user_msg.content}")
+        if ai_msg:
+            # Truncate long answers
+            answer = ai_msg.content
+            answer_preview = answer[:300] + "..." if len(answer) > 300 else answer
+            history_parts.append(f"  Assistant: {answer_preview}")
 
     return "\n".join(history_parts)
 
 
 def build_intent_prompt(
     user_query: str,
-    conversation_history: list[dict[str, Any]],
+    messages: list[Any] | None = None,
 ) -> str:
     """Build the intent classification prompt.
 
     Args:
         user_query: Current user query to classify
-        conversation_history: list of previous Q&A turns
+        messages: LangGraph messages for conversation history
 
     Returns:
         Formatted prompt string for intent classification
     """
-    history_str = _format_history_for_intent(conversation_history)
+    history_str = _format_history_for_intent(messages)
 
     return INTENT_USER_PROMPT_TEMPLATE.substitute(
         history=history_str,

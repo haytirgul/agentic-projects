@@ -3,13 +3,18 @@
 This module defines the shared state structure used across all graph nodes
 in the retrieval and synthesis pipeline.
 
+Uses LangGraph's built-in message management via `add_messages` annotation
+for automatic conversation history tracking with checkpointer.
+
 Author: Hay Hoffman
-Version: 1.2
 """
 
-from typing import TypedDict
+from typing import Annotated
 
 from langchain_core.messages import BaseMessage
+from langgraph.graph.message import add_messages
+from typing_extensions import TypedDict
+
 from models.retrieval import RouterOutput
 
 __all__ = ["AgentState"]
@@ -20,6 +25,10 @@ class AgentState(TypedDict, total=False):
 
     This state is shared across all nodes in the LangGraph workflow.
     Each node can read from and write to this state.
+
+    v1.3: Uses LangGraph's `add_messages` annotation for automatic
+    conversation history management. Messages are persisted via
+    the checkpointer (MemorySaver) and accumulate across turns.
 
     Attributes:
         # User input
@@ -47,14 +56,10 @@ class AgentState(TypedDict, total=False):
         expanded_chunks: Chunks with context expansion (ExpandedChunk)
         retrieval_metadata: Debugging metadata (chunk counts, scores, etc.)
 
-        # Synthesis
-        messages: Conversation messages for LLM synthesis
+        # Conversation (v1.3 - LangGraph built-in)
+        messages: Conversation messages managed by LangGraph's add_messages
         final_answer: The synthesized answer with citations
         citations: list of code citations (file:line references)
-
-        # Conversation history
-        conversation_history: list of previous (query, answer) pairs
-        turn_count: Number of turns in current conversation
 
         # Error handling
         error: Error message if pipeline fails
@@ -103,14 +108,11 @@ class AgentState(TypedDict, total=False):
     expanded_chunks: list[dict] | None  # Serialized ExpandedChunk objects
     retrieval_metadata: dict | None
 
-    # Synthesis
-    messages: list[BaseMessage]
+    # Conversation - v1.3: Uses LangGraph's add_messages for automatic accumulation
+    # Messages are persisted via checkpointer and accumulate across invocations
+    messages: Annotated[list[BaseMessage], add_messages]
     final_answer: str | None
     citations: list[dict] | None
-
-    # Conversation history (for follow-up questions)
-    conversation_history: list[dict] | None  # list of {query, answer, timestamp}
-    turn_count: int | None
 
     # Error handling
     error: str | None

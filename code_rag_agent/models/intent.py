@@ -5,7 +5,6 @@ classification, used when regex patterns don't match and conversation
 history exists.
 
 Author: Hay Hoffman
-Version: 1.0
 """
 
 from enum import Enum

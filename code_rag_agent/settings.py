@@ -11,7 +11,6 @@ This module provides a unified configuration system with two categories:
    - Tunable parameters (temperatures, chunk sizes, top-k)
 
 Author: Hay Hoffman
-Version: 2.0
 """
 
 import os
@@ -77,11 +76,10 @@ RRF_K: int = 60
 FAISS_EMBEDDING_DIM: int = 384  # all-MiniLM-L6-v2
 
 # FAISS HNSW configuration (v1.4)
-# HNSW provides faster approximate nearest neighbor search vs flat index
-FAISS_INDEX_TYPE: str = os.getenv("FAISS_INDEX_TYPE", "hnsw")  # "flat" or "hnsw"
-FAISS_HNSW_M: int = int(os.getenv("FAISS_HNSW_M", "32"))  # Number of connections per layer
-FAISS_HNSW_EF_CONSTRUCTION: int = int(os.getenv("FAISS_HNSW_EF_CONSTRUCTION", "64"))  # Construction time accuracy
-FAISS_HNSW_EF_SEARCH: int = int(os.getenv("FAISS_HNSW_EF_SEARCH", "32"))  # Search time accuracy (higher = more accurate but slower)
+# HNSW provides faster approximate nearest neighbor search
+FAISS_HNSW_M: int = int(os.getenv("FAISS_HNSW_M", "32"))  # Connections per layer (higher = better recall, more memory)
+FAISS_HNSW_EF_CONSTRUCTION: int = int(os.getenv("FAISS_HNSW_EF_CONSTRUCTION", "64"))  # Build accuracy (higher = better index, slower build)
+FAISS_HNSW_EF_SEARCH: int = int(os.getenv("FAISS_HNSW_EF_SEARCH", "32"))  # Search accuracy (higher = better recall, slower search)
 
 # BM25 stopwords (linguistic constant)
 BM25_STOPWORDS: frozenset[str] = frozenset({
@@ -200,7 +198,7 @@ INTENT_MAX_TOKENS: int = int(os.getenv("INTENT_MAX_TOKENS", "1024"))
 # Router Configuration
 # -----------------------------------------------------------------------------
 
-ROUTER_MODEL: str = MODEL_FAST  # Always use fast model for routing
+ROUTER_MODEL: str = MODEL_INTERMEDIATE  # Always use intremidate model for routing
 ROUTER_TEMPERATURE: float = float(os.getenv("ROUTER_TEMPERATURE", "0.1"))
 ROUTER_MAX_TOKENS: int = int(os.getenv("ROUTER_MAX_TOKENS", "1024"))
 ROUTER_MAX_TREE_DEPTH: int = int(os.getenv("ROUTER_MAX_TREE_DEPTH", "4"))
@@ -336,7 +334,6 @@ __all__ = [
     "PROJECT_ROOT",
     "DATA_DIR",
     "INDEX_DIR",
-    "VECTOR_DB_DIR",
     "RAG_COMPONENTS_DIR",
     "CODE_CHUNKS_FILE",
     "MARKDOWN_CHUNKS_FILE",
@@ -351,7 +348,6 @@ __all__ = [
     # Algorithm constants
     "RRF_K",
     "FAISS_EMBEDDING_DIM",
-    "FAISS_INDEX_TYPE",
     "FAISS_HNSW_M",
     "FAISS_HNSW_EF_CONSTRUCTION",
     "FAISS_HNSW_EF_SEARCH",

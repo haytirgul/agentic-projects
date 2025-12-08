@@ -4,7 +4,6 @@ This module provides efficient chunk loading from JSON files with caching
 to minimize disk I/O during retrieval.
 
 Author: Hay Hoffman
-Version: 1.1
 """
 
 import json
@@ -127,49 +126,3 @@ class ChunkLoader:
 
         return self.chunk_cache[chunk_id]
 
-    def load_chunks_batch(self, chunk_ids: list[str]) -> list[BaseChunk]:
-        """Load multiple chunks by ID.
-
-        Args:
-            chunk_ids: list of chunk identifiers
-
-        Returns:
-            list of BaseChunk instances in same order as chunk_ids
-
-        Raises:
-            KeyError: If any chunk_id not found
-        """
-        return [self.load_chunk(chunk_id) for chunk_id in chunk_ids]
-
-    def get_chunks_by_source_type(self, source_type: str) -> list[BaseChunk]:
-        """Get all chunks for a given source type.
-
-        Args:
-            source_type: One of "code", "markdown", "text"
-
-        Returns:
-            list of chunks for the source type
-        """
-        return self.chunks_by_source.get(source_type, [])
-
-    def get_total_chunks(self) -> int:
-        """Get total number of loaded chunks.
-
-        Returns:
-            Total chunk count
-        """
-        return len(self.chunk_cache)
-
-    def get_stats(self) -> dict:
-        """Get statistics about loaded chunks.
-
-        Returns:
-            Dict with chunk counts by source type
-        """
-        return {
-            "total_chunks": self.get_total_chunks(),
-            "by_source_type": {
-                source_type: len(chunks)
-                for source_type, chunks in self.chunks_by_source.items()
-            }
-        }

@@ -12,7 +12,6 @@ Output:
     - data/rag_components/bm25_chunk_ids.json (position -> chunk_id mapping)
 
 Author: Hay Hoffman
-Version: 1.1
 """
 
 import json

@@ -8,7 +8,6 @@ The prompts are split into system and user components:
 Uses string.Template for safe substitution (avoids issues with special characters).
 
 Author: Hay Hoffman
-Version: 1.3
 """
 
 from string import Template
@@ -117,15 +116,27 @@ def _format_citations(expanded_chunks: list[dict[str, Any]]) -> str:
     return "\n\n".join(context_parts)
 
 
-def _format_history(conversation_history: list[dict[str, Any]]) -> str:
-    """Format conversation history for context."""
-    if not conversation_history:
+def _format_history(messages: list[Any] | None) -> str:
+    """Format conversation history for context.
+
+    v1.3: Now accepts LangGraph messages (HumanMessage/AIMessage) instead of dicts.
+
+    Args:
+        messages: List of BaseMessage objects from LangGraph state
+
+    Returns:
+        Formatted history string (last 6 messages = 3 turns)
+    """
+    if not messages:
         return "No previous conversation."
 
+    # Take last 6 messages (3 Q&A turns)
+    recent_messages = messages[-6:]
+
     history_str = ""
-    for turn in conversation_history[-3:]:
-        history_str += f"User: {turn.get('query', '')}\n"
-        history_str += f"Assistant: {turn.get('answer', '')}\n\n"
+    for msg in recent_messages:
+        role = "User" if msg.type == "human" else "Assistant"
+        history_str += f"{role}: {msg.content}\n\n"
 
     return history_str
 
@@ -142,7 +153,7 @@ def build_system_prompt() -> str:
 def build_user_prompt(
     user_query: str,
     expanded_chunks: list[dict[str, Any]],
-    conversation_history: list[dict[str, Any]] | None = None,
+    messages: list[Any] | None = None,
 ) -> str:
     """Build the user prompt containing context, history, and query.
 
@@ -151,15 +162,13 @@ def build_user_prompt(
     Args:
         user_query: The user's question.
         expanded_chunks: list of retrieved chunks with context.
-        conversation_history: list of previous Q&A pairs.
+        messages: LangGraph messages for conversation history.
 
     Returns:
         The formatted user prompt string.
     """
-    conversation_history = conversation_history or []
-
     context_str = _format_citations(expanded_chunks)
-    history_str = _format_history(conversation_history)
+    history_str = _format_history(messages)
 
     return USER_PROMPT_TEMPLATE.substitute(
         context=context_str,
@@ -171,22 +180,20 @@ def build_user_prompt(
 def build_synthesis_messages(
     user_query: str,
     expanded_chunks: list[dict[str, Any]],
-    conversation_history: list[dict[str, Any]] | None = None,
+    messages: list[Any] | None = None,
 ) -> list[Any]:
     """Build the list of messages for the LLM.
 
     Args:
         user_query: The user's question.
         expanded_chunks: list of retrieved chunks with context.
-        conversation_history: list of previous Q&A pairs.
+        messages: LangGraph messages for conversation history.
 
     Returns:
         list of [SystemMessage, HumanMessage] for LLM invocation.
     """
     system_prompt = build_system_prompt()
-    user_prompt = build_user_prompt(
-        user_query, expanded_chunks, conversation_history
-    )
+    user_prompt = build_user_prompt(user_query, expanded_chunks, messages)
 
     return [
         SystemMessage(content=system_prompt),
@@ -196,19 +203,18 @@ def build_synthesis_messages(
 
 def build_general_question_messages(
     user_query: str,
-    conversation_history: list[dict[str, Any]] | None = None,
+    messages: list[Any] | None = None,
 ) -> list[Any]:
     """Build messages for general questions (no retrieval context needed).
 
     Args:
         user_query: The user's question.
-        conversation_history: list of previous Q&A pairs.
+        messages: LangGraph messages for conversation history.
 
     Returns:
         list of [SystemMessage, HumanMessage] for LLM invocation.
     """
-    conversation_history = conversation_history or []
-    history_str = _format_history(conversation_history)
+    history_str = _format_history(messages)
 
     user_prompt = f"### CONVERSATION HISTORY\n{history_str}\n\n### USER QUESTION\n{user_query}"
 

@@ -8,7 +8,7 @@ import json
 import logging
 import sys
 from pathlib import Path
-from typing import Any, list
+from typing import Any
 
 __all__ = [
     "setup_project_paths",

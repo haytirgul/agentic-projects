@@ -5,7 +5,6 @@ This node decomposes user queries into structured retrieval requests using:
 - LLM router: Gemini Flash for complex queries (~1.5s)
 
 Author: Hay Hoffman
-Version: 1.4
 """
 
 import logging

@@ -1,6 +1,5 @@
 # Code RAG Agent - Chunking Architecture
 
-**Version:** 2.1
 **Author:** Code RAG Agent Team
 **Last Updated:** 2025-12-06
 

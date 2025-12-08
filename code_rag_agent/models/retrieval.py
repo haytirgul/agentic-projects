@@ -5,7 +5,6 @@ in RETRIEVAL_ARCHITECTURE.md. All models align with the unified chunk schema
 from CHUNKING_ARCHITECTURE.md.
 
 Author: Hay Hoffman
-Version: 1.1
 """
 
 from typing import Literal

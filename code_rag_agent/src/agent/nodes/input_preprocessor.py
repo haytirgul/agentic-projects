@@ -10,7 +10,6 @@ The LLM fallback uses structured output to:
 - Provide reasoning for classification decisions
 
 Author: Hay Hoffman
-Version: 1.3
 """
 
 import logging
@@ -151,30 +150,84 @@ def _clean_query(query: str) -> str:
     return cleaned if cleaned else query  # Fallback to original if empty
 
 
-def _format_history_response(conversation_history: list[dict]) -> str:
+def _format_history_response(messages: list[Any] | None, show_full: bool = False) -> str:
     """Format conversation history into a readable response.
 
+    v1.4: Now accepts LangGraph messages (HumanMessage/AIMessage) instead of dicts.
+
     Args:
-        conversation_history: list of conversation turns
+        messages: List of BaseMessage objects from LangGraph state
+        show_full: If True, shows complete AI responses without truncation
 
     Returns:
         Formatted string summarizing the conversation
     """
-    if not conversation_history:
+    if not messages:
         return "No previous conversation history found."
 
     response_parts = ["Here's a summary of our conversation:\n"]
 
-    for i, turn in enumerate(conversation_history, 1):
-        query = turn.get("query", "")
-        answer = turn.get("answer", "")
-        # Truncate long answers for summary
-        answer_preview = answer[:200] + "..." if len(answer) > 200 else answer
+    turn_num = 0
+    for i in range(0, len(messages), 2):
+        turn_num += 1
+        user_msg = messages[i] if i < len(messages) else None
+        ai_msg = messages[i + 1] if i + 1 < len(messages) else None
 
-        response_parts.append(f"**Turn {i}:**")
-        response_parts.append(f"- Question: {query}")
-        response_parts.append(f"- Answer: {answer_preview}\n")
+        response_parts.append(f"**Turn {turn_num}:**")
+        if user_msg:
+            response_parts.append(f"- Question: {user_msg.content}")
+        if ai_msg:
+            answer = ai_msg.content
+            if show_full:
+                # Show complete answer for debugging
+                response_parts.append(f"- Answer: {answer}\n")
+            else:
+                # Truncate long answers for summary
+                answer_preview = answer[:200] + "..." if len(answer) > 200 else answer
+                response_parts.append(f"- Answer: {answer_preview}\n")
 
+    return "\n".join(response_parts)
+
+
+def debug_full_conversation_history(state: dict[str, Any]) -> str:
+    """Debug utility: Show complete conversation history with full LLM responses.
+
+    This function bypasses the 200-character truncation and shows the complete
+    content of all messages in the conversation history.
+
+    Args:
+        state: AgentState containing conversation messages
+
+    Returns:
+        Complete conversation history as formatted string
+
+    Usage:
+        >>> from src.agent.nodes.input_preprocessor import debug_full_conversation_history
+        >>> full_history = debug_full_conversation_history(agent_state)
+        >>> print(full_history)
+    """
+    messages = state.get("messages") or []
+
+    if not messages:
+        return "No conversation history found."
+
+    response_parts = ["=== FULL CONVERSATION HISTORY (DEBUG MODE) ===\n"]
+
+    turn_num = 0
+    for i in range(0, len(messages), 2):
+        turn_num += 1
+        user_msg = messages[i] if i < len(messages) else None
+        ai_msg = messages[i + 1] if i + 1 < len(messages) else None
+
+        response_parts.append(f"**TURN {turn_num}:**")
+        if user_msg:
+            response_parts.append(f"- User: {user_msg.content}")
+        if ai_msg:
+            # Show COMPLETE answer (no truncation)
+            response_parts.append(f"- Assistant: {ai_msg.content}")
+        response_parts.append("")  # Empty line between turns
+
+    response_parts.append("=== END DEBUG OUTPUT ===")
     return "\n".join(response_parts)
 
 
@@ -185,7 +238,7 @@ def _format_history_response(conversation_history: list[dict]) -> str:
 
 def _classify_intent_with_llm(
     user_query: str,
-    conversation_history: list[dict],
+    messages: list[Any] | None,
 ) -> QueryIntent:
     """Classify query intent using LLM with structured output.
 
@@ -193,7 +246,7 @@ def _classify_intent_with_llm(
 
     Args:
         user_query: Current user query
-        conversation_history: list of previous Q&A turns
+        messages: LangGraph messages for conversation history
 
     Returns:
         QueryIntent with classification and resolved query
@@ -204,8 +257,8 @@ def _classify_intent_with_llm(
     logger.info("Using LLM for intent classification")
 
     # Build messages
-    user_prompt = build_intent_prompt(user_query, conversation_history)
-    messages = [
+    user_prompt = build_intent_prompt(user_query, messages)
+    llm_messages = [
         SystemMessage(content=INTENT_SYSTEM_PROMPT),
         HumanMessage(content=user_prompt),
     ]
@@ -213,7 +266,7 @@ def _classify_intent_with_llm(
     # Get cached LLM and invoke with structured output
     llm = get_cached_llm(INTENT_MODEL)
     intent = invoke_structured(
-        messages=messages,
+        messages=llm_messages,
         output_schema=QueryIntent,
         llm=llm,
         temperature=INTENT_TEMPERATURE,
@@ -257,7 +310,7 @@ def input_preprocessor_node(state: AgentState) -> dict[str, Any]:
         ValueError: If user_query is missing from state
 
     Example:
-        >>> state = {"user_query": "Tell me more about that", "conversation_history": [...]}
+        >>> state = {"user_query": "Tell me more about that", "messages": [...]}
         >>> result = input_preprocessor_node(state)
         >>> result["is_follow_up"]
         True
@@ -271,14 +324,17 @@ def input_preprocessor_node(state: AgentState) -> dict[str, Any]:
 
     logger.info(f"Preprocessing query: {user_query[:100]}...")
 
-    conversation_history = state.get("conversation_history", []) or []
+    # v1.4: Use LangGraph messages instead of conversation_history
+    conversation_messages = state.get("messages") or []
 
     # -------------------------------------------------------------------------
     # STAGE 1: Fast path - Regex matching for explicit history queries
     # -------------------------------------------------------------------------
     if _is_explicit_history_query(user_query):
         logger.info("[FAST PATH] Detected explicit history query via regex")
-        history_response = _format_history_response(conversation_history)
+        # Debug mode: Show full responses if "DEBUG" is in the query
+        show_full = "DEBUG" in user_query.upper()
+        history_response = _format_history_response(conversation_messages, show_full=show_full)
 
         return {
             "cleaned_query": user_query,
@@ -306,16 +362,18 @@ def input_preprocessor_node(state: AgentState) -> dict[str, Any]:
     # -------------------------------------------------------------------------
     # STAGE 2: LLM fallback - Only if history exists
     # -------------------------------------------------------------------------
-    if conversation_history:
+    if conversation_messages:
         logger.info("[LLM PATH] History exists, classifying intent with LLM")
 
         try:
-            intent = _classify_intent_with_llm(user_query, conversation_history)
+            intent = _classify_intent_with_llm(user_query, conversation_messages)
 
             if intent.intent == "history_request":
                 # LLM detected implicit history request
                 logger.info("LLM classified as history_request")
-                history_response = _format_history_response(conversation_history)
+                # Debug mode: Show full responses if "DEBUG" is in the query
+                show_full = "DEBUG" in user_query.upper()
+                history_response = _format_history_response(conversation_messages, show_full=show_full)
 
                 return {
                     "cleaned_query": user_query,

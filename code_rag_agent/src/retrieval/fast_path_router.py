@@ -5,7 +5,6 @@ simple queries like hex codes, function names, and file names. This reduces
 latency from ~2s (LLM) to <10ms for ~20% of queries.
 
 Author: Hay Hoffman
-Version: 1.1
 """
 
 import logging

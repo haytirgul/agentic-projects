@@ -10,7 +10,6 @@ v1.2 Optimizations:
 - Indexed by (file_path, class_name) for parent class lookup
 
 Author: Hay Hoffman
-Version: 1.2
 """
 
 import logging
@@ -337,19 +336,6 @@ class ContextExpander:
                     logger.error(f"Failed to load child section {meta.id}: {e}")
 
         return children
-
-    # Keep original methods for backward compatibility (deprecated)
-    def _find_parent_class(self, chunk: CodeChunk) -> CodeChunk | None:
-        """Find parent class by name in same file (deprecated - use _find_parent_class_optimized)."""
-        return self._find_parent_class_optimized(chunk)
-
-    def _find_sibling_methods(self, chunk: CodeChunk) -> list[CodeChunk]:
-        """Find other methods in same class (deprecated - use _find_sibling_methods_optimized)."""
-        return self._find_sibling_methods_optimized(chunk)
-
-    def _find_child_sections(self, chunk: MarkdownChunk) -> list[MarkdownChunk]:
-        """Find child sections (deprecated - use _find_child_sections_optimized)."""
-        return self._find_child_sections_optimized(chunk)
 
     def expand_batch(
         self,

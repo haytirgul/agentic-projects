@@ -7,10 +7,10 @@ Note: Folder filtering uses SOFT matching (boost scores, not exclusion) to preve
 LLM folder inference from reducing recall. See HybridRetriever for folder boost logic.
 
 Author: Hay Hoffman
-Version: 1.2
 """
 
 import logging
+from dataclasses import dataclass
 from fnmatch import fnmatch
 
 from models.retrieval import RetrievalRequest
@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 __all__ = ["MetadataFilter", "ChunkMetadata"]
 
 
+@dataclass
 class ChunkMetadata:
     """Lightweight metadata for filtering and context expansion (kept in RAM).
 
@@ -39,33 +40,20 @@ class ChunkMetadata:
         heading_level: Heading level for markdown chunks (1-6)
     """
 
-    def __init__(
-        self,
-        id: str,
-        source_type: str,
-        filename: str,
-        file_path: str,
-        chunk_type: str | None = None,
-        name: str | None = None,
-        parent_context: str | None = None,
-        start_line: int | None = None,
-        end_line: int | None = None,
-        heading_level: int | None = None,
-    ):
-        self.id = id
-        self.source_type = source_type
-        self.filename = filename
-        self.file_path = file_path
-        self.chunk_type = chunk_type
-        self.name = name
-        self.parent_context = parent_context
-        self.start_line = start_line
-        self.end_line = end_line
-        self.heading_level = heading_level
+    id: str
+    source_type: str
+    filename: str
+    file_path: str
+    chunk_type: str | None = None
+    name: str | None = None
+    parent_context: str | None = None
+    start_line: int | None = None
+    end_line: int | None = None
+    heading_level: int | None = None
 
 
 class MetadataFilter:
-    """Apply metadata filters before search (v1.2 - soft folder filtering).
+    """Apply metadata filters before search.
 
     Filters chunks by source_type and file patterns to reduce the search space.
     Folder filtering is now SOFT (handled via RRF boost in HybridRetriever).

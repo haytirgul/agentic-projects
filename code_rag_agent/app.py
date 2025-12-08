@@ -16,7 +16,6 @@ Commands:
     - Type 'clear' to start a new conversation
 
 Author: Hay Hoffman
-Version: 1.2
 """
 
 import logging
@@ -75,9 +74,12 @@ def process_question(
     app: Any,
     question: str,
     thread_id: str,
-    conversation_history: list[dict] | None = None,
-) -> list[dict] | None:
+) -> bool:
     """Process a user question through the graph.
+
+    v1.3: Conversation history is now managed automatically by LangGraph's
+    add_messages annotation and the MemorySaver checkpointer. No need to
+    pass or track conversation_history manually.
 
     The graph will:
     1. Validate via security gateway
@@ -85,26 +87,24 @@ def process_question(
     3. Route query (fast path or LLM router)
     4. Retrieve chunks (hybrid BM25 + vector with context expansion)
     5. Synthesize answer with streaming output
-    6. Save to conversation memory
+    6. Save messages to conversation memory (via add_messages)
 
     Args:
         app: Compiled graph application
         question: User's question
-        thread_id: Session thread ID for checkpointer
-        conversation_history: Optional conversation history from previous turns
+        thread_id: Session thread ID for checkpointer (persists messages)
 
     Returns:
-        Updated conversation history from this turn
+        True if successful, False if error/blocked
     """
     config = {"configurable": {"thread_id": thread_id}}
 
     print("\n[>] Processing your question...")
 
     try:
-        # Prepare state with question and history
+        # Prepare state with question only
+        # Messages (history) are automatically loaded from checkpointer via thread_id
         initial_state: dict[str, Any] = {"user_query": question}
-        if conversation_history:
-            initial_state["conversation_history"] = conversation_history
 
         # Run the graph
         result = app.invoke(initial_state, config)
@@ -112,15 +112,14 @@ def process_question(
         # Check for errors
         if result.get("error"):
             print(f"\n[X] Error: {result['error']}")
-            return conversation_history
+            return False
 
         # Check if blocked by security
         if result.get("is_blocked"):
             print(f"\n[!] Request blocked: {result.get('gateway_reason', 'Security violation')}")
-            return conversation_history
+            return False
 
-        # Return the updated conversation history for next turn
-        return result.get("conversation_history")
+        return True
 
     except Exception as e:
         print(f"\n[X] Error processing question: {e}")
@@ -129,16 +128,22 @@ def process_question(
 
 
 def run_chatbot() -> None:
-    """Main chatbot loop with conversation history."""
+    """Main chatbot loop with LangGraph-managed conversation history."""
     print_banner()
 
-    # Setup memory checkpoint
+    # Setup memory checkpoint - this persists messages across invocations
     memory = MemorySaver()
 
     # Initialize agent
-    print("[*] Initializing agent (loading LLM and RAG components)...")
+    print("[*] Initializing agent...")
+    print("    - Loading graph...")
     from src.agent.graph import get_compiled_graph
     app = get_compiled_graph(checkpointer=memory)
+
+    print("    - Pre-loading retrieval components (chunks, BM25, embeddings)...")
+    from src.agent.nodes.retrieval import initialize_retrieval
+    initialize_retrieval()
+
     print("[+] Agent ready!\n")
 
     # Display LangSmith status
@@ -150,10 +155,9 @@ def run_chatbot() -> None:
         print("    To enable: Set LANGCHAIN_TRACING_V2=true in .env")
 
     # Create a session ID for this conversation
+    # Same thread_id = same conversation history (managed by MemorySaver)
     session_id = str(uuid.uuid4())
-
-    # Track conversation history across turns
-    conversation_history: list[dict] | None = None
+    turn_count = 0
 
     while True:
         try:
@@ -166,8 +170,8 @@ def run_chatbot() -> None:
 
             # Handle commands
             if user_input.lower() in ["quit", "exit"]:
-                if conversation_history:
-                    print(f"\n[i] This conversation had {len(conversation_history)} turn(s).")
+                if turn_count > 0:
+                    print(f"\n[i] This conversation had {turn_count} turn(s).")
                 print("\nGoodbye! Thanks for using the Code RAG Agent.")
                 break
 
@@ -176,18 +180,16 @@ def run_chatbot() -> None:
                 continue
 
             if user_input.lower() == "clear":
+                # New session_id = new conversation (messages won't carry over)
                 session_id = str(uuid.uuid4())
-                conversation_history = None
+                turn_count = 0
                 print("\n[>] Started new conversation.")
                 continue
 
-            # Process the question and get updated history
-            conversation_history = process_question(
-                app,
-                user_input,
-                session_id,
-                conversation_history
-            )
+            # Process the question
+            success = process_question(app, user_input, session_id)
+            if success:
+                turn_count += 1
 
         except KeyboardInterrupt:
             print("\n\nInterrupted. Goodbye!")

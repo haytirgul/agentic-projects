@@ -3,7 +3,6 @@
 This module provides LLM creation, caching, and worker utilities.
 
 Author: Hay Hoffman
-Version: 1.2
 """
 
 from src.llm.llm import (

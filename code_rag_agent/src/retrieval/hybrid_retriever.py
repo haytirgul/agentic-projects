@@ -1,14 +1,12 @@
 """Hybrid retrieval combining BM25 and FAISS with weighted RRF.
 
-This module implements the core retrieval architecture specified in
-RETRIEVAL_ARCHITECTURE.md v1.3, featuring:
+This module implements the core retrieval architecture featuring:
 - Weighted Reciprocal Rank Fusion (0.4/1.0 for BM25/Vector)
 - Code-aware BM25 tokenization (camelCase, snake_case splitting)
 - Graduated fallback to prevent zero-result failures
 - Soft folder filtering (boost, not exclude) to preserve recall
 - Metadata-based filtering for source_type and file_patterns
-
-v1.3 Optimizations:
+- Parallel multi-query retrieval (max 3 concurrent requests)
 - Pre-built BM25 indices per source_type (avoid rebuild per query)
 - Pre-compiled regex patterns for tokenization
 - Pre-built id->file_path lookup dict
@@ -16,10 +14,8 @@ v1.3 Optimizations:
 - Optimized FAISS vector reconstruction
 
 Author: Hay Hoffman
-Version: 1.3
 """
 
-import asyncio
 import logging
 import re
 from collections import defaultdict
@@ -27,7 +23,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import numpy as np
-from rank_bm25 import BM25Okapi
+from rank_bm25 import BM25Okapi  
 
 from models.retrieval import RetrievalRequest, RetrievedChunk
 from settings import (
@@ -45,7 +41,7 @@ logger = logging.getLogger(__name__)
 
 __all__ = ["HybridRetriever"]
 
-# Pre-compiled regex patterns for tokenization (v1.3 optimization)
+# Pre-compiled regex patterns for tokenization 
 _CAMEL_CASE_PATTERN_1 = re.compile(r'(?<=[a-z])(?=[A-Z])')  # lowercase → uppercase
 _CAMEL_CASE_PATTERN_2 = re.compile(r'(?<=[A-Z])(?=[A-Z][a-z])')  # HTTPSServer → HTTPS Server
 _UNDERSCORE_PATTERN = re.compile(r'_+')
@@ -53,15 +49,16 @@ _NON_ALPHANUM_PATTERN = re.compile(r'[^a-zA-Z0-9x\s]')
 
 
 class HybridRetriever:
-    """Hybrid retrieval combining BM25 and FAISS with weighted RRF (v1.3).
+    """Hybrid retrieval combining BM25 and FAISS with weighted RRF.
 
-    Key Features (v1.3):
+    Key Features:
     - Weighted RRF (BM25: 0.4, Vector: 1.0) for class chunk recall
     - Code-aware tokenization (camelCase/snake_case splitting)
     - Graduated fallback (4 levels) to prevent zero results
     - SOFT folder filtering: boost scores for folder matches (don't exclude)
     - Pre-built BM25 indices per source_type (avoid rebuild per query)
     - Async parallel search for BM25 + FAISS
+    - Parallel multi-query retrieval (max 3 concurrent requests)
     - Pre-built lookup dicts for O(1) access
 
     Attributes:
@@ -76,7 +73,8 @@ class HybridRetriever:
         vector_weight: Weight for vector search in RRF scoring
         folder_boost: Multiplier for chunks matching inferred folders
         _embedding_model: Cached SentenceTransformer model (lazy-loaded)
-        _executor: ThreadPoolExecutor for parallel search
+        _executor: ThreadPoolExecutor for parallel search (BM25 + FAISS)
+        _multi_query_executor: ThreadPoolExecutor for parallel multi-query retrieval
     """
 
     # Class-level cached embedding model (shared across instances)
@@ -115,14 +113,15 @@ class HybridRetriever:
         self.vector_weight = vector_weight
         self.folder_boost = folder_boost
 
-        # Thread pool for parallel search (v1.3)
+        # Thread pool for parallel BM25 + FAISS search 
         self._executor = ThreadPoolExecutor(max_workers=2)
+        # Thread pool for parallel multi-query retrieval 
+        self._multi_query_executor = ThreadPoolExecutor(max_workers=4)
 
         # Path-based initialization
         if chunks_dir is not None and index_dir is not None:
             from src.retrieval.chunk_loader import ChunkLoader
             from src.retrieval.faiss_store import FAISSStore
-            from src.retrieval.metadata_filter import ChunkMetadata
 
             logger.info(f"Initializing HybridRetriever from paths: {chunks_dir}, {index_dir}")
 
@@ -148,10 +147,7 @@ class HybridRetriever:
                 "(metadata_index, faiss_store, chunk_loader)"
             )
 
-        # Create a MetadataFilter-compatible wrapper for backward compatibility
-        self.metadata_filter = _MetadataFilterCompat(self.metadata_index)
-
-        # v1.3: Pre-build optimized lookup structures
+        # Pre-build optimized lookup structures
         logger.info("Building optimized lookup structures...")
         self.id_to_file_path: dict[str, str] = {}
         self.id_to_tokens: dict[str, list[str]] = {}
@@ -208,7 +204,7 @@ class HybridRetriever:
         return metadata_index
 
     def _build_lookup_structures(self):
-        """Build pre-computed lookup dicts for O(1) access (v1.3).
+        """Build pre-computed lookup dicts for O(1) access.
 
         Builds:
         - id_to_file_path: chunk_id -> file_path (for folder boost)
@@ -230,7 +226,7 @@ class HybridRetriever:
         )
 
     def _build_bm25_indices(self):
-        """Build pre-computed BM25 indices per source_type (v1.3).
+        """Build pre-computed BM25 indices per source_type.
 
         This avoids rebuilding BM25 index on every search query.
         """
@@ -253,9 +249,9 @@ class HybridRetriever:
         request: RetrievalRequest,
         top_k: int = 20
     ) -> list[RetrievedChunk]:
-        """Execute hybrid search with soft folder boosting (v1.3).
+        """Execute hybrid search with soft folder boosting.
 
-        v1.3 Update: Uses pre-built BM25 indices and parallel search.
+        Uses pre-built BM25 indices and parallel search.
 
         Steps:
         1. Metadata filtering (source_type + file_patterns only)
@@ -321,19 +317,19 @@ class HybridRetriever:
         # Convert to set for O(1) lookup (v1.3 optimization)
         candidate_id_set = set(candidate_ids)
 
-        # 2. Parallel BM25 + FAISS search (v1.3)
+        # 2. Parallel BM25 + FAISS search
         bm25_future = self._executor.submit(
             self._bm25_search_optimized,
             request.query,
             candidate_id_set,
-            request.source_types,
+            list(request.source_types),  # Convert Literal types to list[str]
             50
         )
         faiss_future = self._executor.submit(
             self._faiss_search_optimized,
             request.query,
             candidate_id_set,
-            request.source_types,
+            list(request.source_types),  # Convert Literal types to list[str]
             50
         )
 
@@ -386,7 +382,7 @@ class HybridRetriever:
         source_types: list[str],
         top_n: int = 50
     ) -> list[tuple[str, float]]:
-        """BM25 search using pre-built indices (v1.3 optimized).
+        """BM25 search using pre-built indices.
 
         Uses pre-built BM25 indices instead of rebuilding per query.
         Filters results to candidate set after scoring.
@@ -429,7 +425,7 @@ class HybridRetriever:
         source_types: list[str],
         top_n: int = 50
     ) -> list[tuple[str, float]]:
-        """FAISS vector search with optimized reconstruction (v1.3).
+        """FAISS vector search with optimized reconstruction.
 
         Uses selective vector reconstruction instead of loading all vectors.
 
@@ -451,7 +447,7 @@ class HybridRetriever:
 
         # Search each source type's FAISS index
         for source_type in source_types:
-            index = self.faiss_store.get_index(source_type)
+            index = self.faiss_store.load_index(source_type)
             if index is None:
                 continue
 
@@ -505,7 +501,7 @@ class HybridRetriever:
         return results[:top_n]
 
     def _tokenize(self, text: str) -> list[str]:
-        """Code-aware tokenization for BM25 (v1.3 optimized).
+        """Code-aware tokenization for BM25.
 
         Uses pre-compiled regex patterns for better performance.
 
@@ -591,7 +587,7 @@ class HybridRetriever:
         bm25_weight: float = 0.4,
         vector_weight: float = 1.0
     ) -> list[tuple[str, float]]:
-        """Weighted Reciprocal Rank Fusion with k=60 (v1.1).
+        """Weighted Reciprocal Rank Fusion with k=60.
 
         Formula: RRF_score(chunk) = bm25_weight * sum(1/(k + rank_bm25)) +
                                      vector_weight * sum(1/(k + rank_vector))
@@ -631,7 +627,7 @@ class HybridRetriever:
         folders: list[str],
         boost_factor: float = 1.3
     ) -> list[tuple[str, float]]:
-        """Apply folder boost to chunks matching inferred folders (v1.3).
+        """Apply folder boost to chunks matching inferred folders.
 
         Uses pre-built id_to_file_path dict for O(1) lookup.
 
@@ -646,7 +642,7 @@ class HybridRetriever:
         boosted_results = []
 
         for chunk_id, score in ranked_ids:
-            # v1.3: Use pre-built lookup dict
+            # Use pre-built lookup dict
             file_path = self.id_to_file_path.get(chunk_id, "")
 
             # Check if file_path matches any folder
@@ -672,10 +668,13 @@ class HybridRetriever:
         retrieval_requests: list[RetrievalRequest],
         top_k: int = 20
     ) -> list[RetrievedChunk]:
-        """Retrieve chunks from multiple retrieval requests.
+        """Retrieve chunks from multiple retrieval requests in parallel (v1.4).
 
         This is the main entry point for the retrieval node, handling
         multiple retrieval requests from the router.
+
+        v1.4: Processes multiple requests in parallel (max 3 concurrent)
+        for faster retrieval when router generates multiple queries.
 
         Args:
             retrieval_requests: List of RetrievalRequest objects from router
@@ -684,37 +683,52 @@ class HybridRetriever:
         Returns:
             List of RetrievedChunk objects (deduplicated across requests)
         """
-        all_chunks: dict[str, RetrievedChunk] = {}  # Dedupe by chunk_id
+        if not retrieval_requests:
+            return []
 
-        for request in retrieval_requests:
-            logger.info(f"Processing retrieval request: {request.query[:50]}...")
+        # Single request - no parallelism overhead needed
+        if len(retrieval_requests) == 1:
+            logger.info(f"Single request: {retrieval_requests[0].query[:50]}...")
+            return self.search(retrieval_requests[0], top_k=top_k)
 
-            chunks = self.search(request, top_k=top_k)
+        # Multiple requests - process in parallel (max 3 concurrent)
+        logger.info(f"Processing {len(retrieval_requests)} requests in parallel...")
 
-            for chunk in chunks:
-                chunk_id = chunk.chunk.id
-                # Keep higher-scored version if duplicate
-                if chunk_id not in all_chunks or chunk.rrf_score > all_chunks[chunk_id].rrf_score:
-                    all_chunks[chunk_id] = chunk
+        # Submit all search tasks
+        futures = [
+            self._multi_query_executor.submit(self.search, request, top_k)
+            for request in retrieval_requests
+        ]
+
+        # Collect results and deduplicate
+        all_chunks: dict[str, RetrievedChunk] = {}
+
+        for future, request in zip(futures, retrieval_requests):
+            try:
+                chunks = future.result()
+                logger.debug(f"Request '{request.query[:30]}...' returned {len(chunks)} chunks")
+
+                for chunk in chunks:
+                    chunk_id = chunk.chunk.id
+                    # Keep higher-scored version if duplicate
+                    if chunk_id not in all_chunks or chunk.rrf_score > all_chunks[chunk_id].rrf_score:
+                        all_chunks[chunk_id] = chunk
+
+            except Exception as e:
+                logger.error(f"Request '{request.query[:30]}...' failed: {e}")
+                continue
 
         # Sort by RRF score and return
         result = sorted(all_chunks.values(), key=lambda x: x.rrf_score, reverse=True)
-        logger.info(f"Retrieved {len(result)} unique chunks from {len(retrieval_requests)} requests")
+        logger.info(f"Retrieved {len(result)} unique chunks from {len(retrieval_requests)} parallel requests")
 
         return result
 
     def __del__(self):
-        """Cleanup thread pool on deletion."""
+        """Cleanup thread pools on deletion."""
         if hasattr(self, '_executor'):
             self._executor.shutdown(wait=False)
+        if hasattr(self, '_multi_query_executor'):
+            self._multi_query_executor.shutdown(wait=False)
 
 
-class _MetadataFilterCompat:
-    """Compatibility wrapper providing metadata_index attribute.
-
-    This allows retrieval.py to access metadata_index via retriever.metadata_filter.metadata_index
-    for backward compatibility with ContextExpander.
-    """
-
-    def __init__(self, metadata_index: dict[str, list]):
-        self.metadata_index = metadata_index

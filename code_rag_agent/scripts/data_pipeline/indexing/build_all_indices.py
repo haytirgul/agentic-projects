@@ -10,7 +10,6 @@ Usage:
     python scripts/data_pipeline/indexing/build_all_indices.py
 
 Author: Hay Hoffman
-Version: 1.1
 """
 
 import logging

@@ -1,18 +1,16 @@
-"""Conversation memory node (combined: save + prompt + reset).
+"""Conversation memory node (simplified with LangGraph built-ins).
 
-This node handles all conversation memory operations in a single node
-for minimal latency:
-- Saves conversation turn (query, answer, citations)
-- Prompts user to continue
-- Resets per-query state while preserving history
+This node handles end-of-turn operations. Conversation history is now
+managed automatically by LangGraph's `add_messages` annotation and
+the checkpointer (MemorySaver).
 
 Author: Hay Hoffman
-Version: 1.1
 """
 
 import logging
-from datetime import datetime
 from typing import Any
+
+from langchain_core.messages import AIMessage, HumanMessage
 
 from src.agent.state import AgentState
 
@@ -22,95 +20,62 @@ logger = logging.getLogger(__name__)
 
 
 def conversation_memory_node(state: AgentState) -> dict[str, Any]:
-    """Handle conversation memory (save + prompt + reset combined).
+    """Handle end-of-turn operations (simplified v1.2).
 
-    This node performs three operations in one for minimal latency:
-    1. Save turn: Store (query, answer, citations) in conversation_history
-    2. Prompt continue: Check if user wants to continue (external control)
-    3. Reset state: Clear per-query state, preserve history
+    v1.2: Conversation history is now managed by LangGraph's `add_messages`
+    annotation. This node only needs to:
+    1. Add the current turn's messages to the state (auto-accumulated)
+    2. Reset per-query state for the next turn
+
+    The checkpointer (MemorySaver) automatically persists messages across
+    invocations when using the same thread_id.
 
     Args:
         state: Current agent state containing:
             - user_query: User's question
             - final_answer: Generated answer
-            - citations: list of citations
-            - conversation_history: Existing history (optional)
-            - continue_conversation: External control flag (optional)
+            - messages: Existing conversation (managed by add_messages)
 
     Returns:
         Updated state with:
-            - conversation_history: Updated history with new turn
-            - turn_count: Incremented turn count
-            - continue_conversation: Whether to continue or end
-            - (cleared): router_output, retrieved_chunks, expanded_chunks, etc.
+            - messages: Current turn added (HumanMessage + AIMessage)
+            - (cleared): per-query state for next turn
 
     Example:
-        >>> state = {
-        ...     "user_query": "How does BM25 work?",
-        ...     "final_answer": "BM25 uses...",
-        ...     "citations": [...]
-        ... }
+        >>> state = {"user_query": "How does BM25 work?", "final_answer": "BM25 uses..."}
         >>> result = conversation_memory_node(state)
-        >>> len(result["conversation_history"])
-        1
+        >>> len(result["messages"])  # New messages for this turn
+        2
     """
-    # Extract turn data
     user_query: str = state.get("user_query") or ""
     final_answer: str = state.get("final_answer") or ""
-    citations: list = state.get("citations") or []
 
-    # Get existing history
-    conversation_history: list[dict] = state.get("conversation_history") or []
-    turn_count: int = state.get("turn_count") or 0
+    # Build messages for this turn
+    # add_messages annotation will automatically append these to existing messages
+    turn_messages = [
+        HumanMessage(content=user_query),
+        AIMessage(content=final_answer),
+    ]
 
-    # === OPERATION 1: Save Turn ===
-    turn_data = {
-        "query": user_query,
-        "answer": final_answer,
-        "citations": citations,
-        "timestamp": datetime.now().isoformat(),
-        "turn": turn_count + 1,
-    }
-
-    conversation_history.append(turn_data)
-    turn_count += 1
+    # Count turns from messages (each turn = 1 human + 1 AI message)
+    existing_messages = state.get("messages") or []
+    turn_count = (len(existing_messages) // 2) + 1
 
     logger.info(
-        f"[SUCCESS] Saved conversation turn #{turn_count}: "
+        f"[SUCCESS] Completed turn #{turn_count}: "
         f"query={user_query[:50]}..., answer_length={len(final_answer)}"
     )
 
-    # === OPERATION 2: Prompt Continue ===
-    # Check for external control (chatbot mode)
-    external_control = state.get("continue_conversation") is False
-
-    if external_control:
-        logger.info("External control detected (chatbot mode) - ending turn")
-        continue_conversation = False
-    else:
-        # Autonomous mode: continue by default
-        logger.info("Autonomous mode - ready for next query")
-        continue_conversation = True
-
-    # === OPERATION 3: Reset State ===
-    # Clear per-query state while preserving history
-    reset_updates = {
-        # Preserve
-        "conversation_history": conversation_history,
-        "turn_count": turn_count,
-        "continue_conversation": continue_conversation,
+    # Return updates - messages will accumulate via add_messages
+    # Clear per-query state for next invocation
+    return {
+        "messages": turn_messages,  # add_messages will append, not replace
         # Clear per-query state
         "router_output": None,
-        "codebase_tree": None,
         "retrieved_chunks": None,
         "expanded_chunks": None,
         "retrieval_metadata": None,
-        "messages": [],
         "final_answer": None,
         "citations": None,
         "error": None,
     }
-
-    logger.debug(f"State reset complete (preserved history: {turn_count} turns)")
-
-    return reset_updates

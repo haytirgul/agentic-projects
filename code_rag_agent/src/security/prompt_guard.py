@@ -151,21 +151,24 @@ class PromptGuardClassifier:
         # Load model
         try:
             logger.debug("Loading model...")
-            model_kwargs = common_kwargs.copy()
-
-            # Use FP16 precision if enabled and on CUDA
-            # Note: self.device is guaranteed to be set above
             assert self.device is not None  # For type checker
-            if self.use_fp16 and self.device.type == "cuda":
-                model_kwargs["torch_dtype"] = torch.float16
-                logger.info("Using FP16 precision for faster inference")
 
+            # Load model to CPU first, then move to target device
+            # This avoids meta tensor issues from accelerate/device_map
             self.model = AutoModelForSequenceClassification.from_pretrained(
                 self.MODEL,
-                **model_kwargs
+                **common_kwargs
             )
-            self.model.to(self.device)
-            logger.debug(f"Model moved to device: {self.device}")
+
+            # Move to target device
+            self.model = self.model.to(self.device)
+
+            # Convert to FP16 if enabled and on CUDA
+            if self.use_fp16 and self.device.type == "cuda":
+                self.model = self.model.half()
+                logger.info("Using FP16 precision for faster inference")
+
+            logger.debug(f"Model loaded to device: {self.device}")
 
         except Exception as e:
             logger.error(f"Failed to load model: {e}", exc_info=True)
@@ -174,7 +177,7 @@ class PromptGuardClassifier:
         # Create pipeline
         try:
             logger.debug("Creating classification pipeline...")
-            # Determine device for pipeline (0 for cuda, -1 for cpu)
+            # Device: 0 for cuda:0, -1 for cpu
             pipeline_device = 0 if self.device.type == "cuda" else -1
             self.classifier = pipeline(
                 "text-classification",

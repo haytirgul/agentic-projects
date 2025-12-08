@@ -4,7 +4,6 @@ This node performs hybrid search (BM25 + Vector) with weighted RRF and
 expands results with contextual information (parent/sibling/imports).
 
 Author: Hay Hoffman
-Version: 1.1
 """
 
 import logging
@@ -21,7 +20,7 @@ from settings import (
 from src.agent.state import AgentState
 from src.retrieval import ContextExpander, HybridRetriever
 
-__all__ = ["retrieval_node"]
+__all__ = ["retrieval_node", "initialize_retrieval"]
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +29,7 @@ _retriever = None
 _expander = None
 
 
-def _initialize_retrieval_components():
+def initialize_retrieval():
     """Initialize retrieval components (called once at startup).
 
     v1.3 Optimization: Reuse chunk_loader from retriever instead of creating duplicate.
@@ -52,9 +51,9 @@ def _initialize_retrieval_components():
             vector_weight=RRF_VECTOR_WEIGHT,
         )
 
-        # v1.3: Reuse chunk_loader from retriever (avoid duplicate loading)
+        # Reuse chunk_loader from retriever (avoid duplicate loading)
         _expander = ContextExpander(
-            metadata_index=_retriever.metadata_filter.metadata_index,
+            metadata_index=_retriever.metadata_index,
             chunk_loader=_retriever.chunk_loader,  # Reuse instead of creating new
         )
 
@@ -101,7 +100,7 @@ def retrieval_node(state: AgentState) -> dict[str, Any]:
     logger.info("Starting retrieval with context expansion...")
 
     # Initialize components (singleton pattern)
-    _initialize_retrieval_components()
+    initialize_retrieval()
 
     # Assert components are initialized (for type checker)
     assert _retriever is not None, "Retriever not initialized"

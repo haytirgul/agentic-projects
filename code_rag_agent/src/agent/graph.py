@@ -16,7 +16,6 @@ Graph Flow:
           → router → retrieval → synthesis → conversation_memory
           → security_gateway (loop) OR END
 
-Architecture Version: 1.2
 Author: Hay Hoffman
 """
 
@@ -24,7 +23,6 @@ from __future__ import annotations
 
 import logging
 from functools import partial
-from pathlib import Path
 from typing import Any
 
 from settings import (
@@ -32,6 +30,22 @@ from settings import (
     ROUTER_MODEL,
     SYNTHESIS_MODEL,
 )
+
+from langgraph.graph import END, StateGraph
+
+from src.agent.nodes.conversation_memory import conversation_memory_node
+from src.agent.nodes.input_preprocessor import input_preprocessor_node
+from src.agent.nodes.retrieval import retrieval_node
+from src.agent.nodes.router import router_node
+from src.agent.nodes.security_gateway import security_gateway_node
+from src.agent.nodes.synthesis import synthesis_node
+from src.agent.routing import (
+    route_after_conversation_memory,
+    route_after_input_preprocessor,
+    route_after_security_gateway,
+)
+from src.agent.state import AgentState
+from src.llm import initialize_llm_cache
 
 __all__ = [
     "build_code_rag_graph",
@@ -91,23 +105,6 @@ def build_code_rag_graph() -> Any:
         >>> result = app.invoke({"user_query": "How does BM25 tokenization work?"})
         >>> print(result["final_answer"])
     """
-    # Import heavy dependencies only when building graph
-    from langgraph.graph import END, StateGraph
-
-    from src.agent.nodes.conversation_memory import conversation_memory_node
-    from src.agent.nodes.input_preprocessor import input_preprocessor_node
-    from src.agent.nodes.retrieval import retrieval_node
-    from src.agent.nodes.router import router_node
-    from src.agent.nodes.security_gateway import security_gateway_node
-    from src.agent.nodes.synthesis import synthesis_node
-    from src.agent.routing import (
-        route_after_conversation_memory,
-        route_after_input_preprocessor,
-        route_after_security_gateway,
-    )
-    from src.agent.state import AgentState
-    from src.llm import initialize_llm_cache
-
     logger.info("Building Code RAG Agent graph (v1.2)...")
 
     # Initialize LLM cache
@@ -142,10 +139,11 @@ def build_code_rag_graph() -> Any:
         },
     )
 
-    # Input preprocessor → three possible paths:
+    # Input preprocessor → four possible paths:
     # 1. conversation_memory: History query (final_answer already set)
     # 2. synthesis: Follow-up with sufficient history (skip retrieval)
     # 3. router: New question or follow-up needing fresh retrieval
+    # 4. security_gateway: Out of scope query (route back to start)
     graph.add_conditional_edges(
         "input_preprocessor",
         route_after_input_preprocessor,
@@ -153,6 +151,7 @@ def build_code_rag_graph() -> Any:
             "conversation_memory": "conversation_memory",  # History query shortcut
             "synthesis": "synthesis",  # Follow-up (history sufficient)
             "router": "router",  # Normal flow (needs retrieval)
+            "security_gateway": "security_gateway",  # Out of scope (back to start)
         },
     )
 
