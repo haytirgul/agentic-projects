@@ -76,6 +76,13 @@ RRF_K: int = 60
 # FAISS embedding dimension (determined by embedding model)
 FAISS_EMBEDDING_DIM: int = 384  # all-MiniLM-L6-v2
 
+# FAISS HNSW configuration (v1.4)
+# HNSW provides faster approximate nearest neighbor search vs flat index
+FAISS_INDEX_TYPE: str = os.getenv("FAISS_INDEX_TYPE", "hnsw")  # "flat" or "hnsw"
+FAISS_HNSW_M: int = int(os.getenv("FAISS_HNSW_M", "32"))  # Number of connections per layer
+FAISS_HNSW_EF_CONSTRUCTION: int = int(os.getenv("FAISS_HNSW_EF_CONSTRUCTION", "64"))  # Construction time accuracy
+FAISS_HNSW_EF_SEARCH: int = int(os.getenv("FAISS_HNSW_EF_SEARCH", "32"))  # Search time accuracy (higher = more accurate but slower)
+
 # BM25 stopwords (linguistic constant)
 BM25_STOPWORDS: frozenset[str] = frozenset({
     "the", "a", "an", "is", "are", "was", "were", "be", "been"
@@ -214,7 +221,7 @@ SYNTHESIS_MAX_TOKENS: int = int(os.getenv("SYNTHESIS_MAX_TOKENS", "4096"))
 # -----------------------------------------------------------------------------
 
 # Top-K settings
-TOP_K_PER_REQUEST: int = int(os.getenv("TOP_K_PER_REQUEST", "5"))
+TOP_K_PER_REQUEST: int = int(os.getenv("TOP_K_PER_REQUEST", "3"))
 RRF_TOP_N: int = int(os.getenv("RRF_TOP_N", "50"))
 MAX_RETRIEVAL_REQUESTS: int = int(os.getenv("MAX_RETRIEVAL_REQUESTS", "5"))
 
@@ -344,6 +351,10 @@ __all__ = [
     # Algorithm constants
     "RRF_K",
     "FAISS_EMBEDDING_DIM",
+    "FAISS_INDEX_TYPE",
+    "FAISS_HNSW_M",
+    "FAISS_HNSW_EF_CONSTRUCTION",
+    "FAISS_HNSW_EF_SEARCH",
     "BM25_STOPWORDS",
     "FAST_PATH_PATTERNS",
     "REPO_EXCLUDE_PATTERNS",

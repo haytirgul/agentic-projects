@@ -7,6 +7,11 @@ This script:
 4. Builds and saves FAISS indices to data/index/
 5. Saves ID mappings for chunk retrieval
 
+v1.2 Updates:
+- Added HNSW index support for faster approximate nearest neighbor search
+- Configurable via FAISS_INDEX_TYPE setting ("flat" or "hnsw")
+- HNSW parameters: M (connections), efConstruction (build accuracy)
+
 Usage:
     python scripts/data_pipeline/indexing/build_faiss_index.py
 
@@ -17,7 +22,7 @@ Output:
     - data/index/{source_type}_id_mapping.json (for each type)
 
 Author: Hay Hoffman
-Version: 1.1
+Version: 1.2
 """
 
 import json
@@ -39,6 +44,9 @@ from settings import (
     EMBEDDING_BATCH_SIZE,
     EMBEDDING_MODEL,
     FAISS_EMBEDDING_DIM,
+    FAISS_HNSW_EF_CONSTRUCTION,
+    FAISS_HNSW_M,
+    FAISS_INDEX_TYPE,
     INDEX_DIR,
 )
 
@@ -132,8 +140,11 @@ def generate_embeddings(
 def build_faiss_index(embeddings: np.ndarray) -> faiss.Index:
     """Build FAISS index from embeddings.
 
-    Uses IndexFlatIP (Inner Product) for normalized vectors,
-    which is equivalent to cosine similarity.
+    v1.2: Supports both Flat and HNSW index types.
+
+    Index Types:
+    - Flat (IndexFlatIP): Exact search, uses inner product for normalized vectors
+    - HNSW (IndexHNSWFlat): Approximate search, faster for large indices
 
     Args:
         embeddings: Numpy array of embeddings (n_chunks, embedding_dim)
@@ -142,14 +153,29 @@ def build_faiss_index(embeddings: np.ndarray) -> faiss.Index:
         FAISS index
     """
     dimension = embeddings.shape[1]
+    n_vectors = embeddings.shape[0]
 
-    # Use IndexFlatIP for normalized vectors (cosine similarity)
-    index = faiss.IndexFlatIP(dimension)
+    if FAISS_INDEX_TYPE == "hnsw":
+        # Build HNSW index for approximate nearest neighbor search
+        # M: number of connections per layer (higher = more accurate but more memory)
+        # efConstruction: depth of search during construction (higher = slower build, more accurate)
+        index = faiss.IndexHNSWFlat(dimension, FAISS_HNSW_M, faiss.METRIC_INNER_PRODUCT)
+        index.hnsw.efConstruction = FAISS_HNSW_EF_CONSTRUCTION
 
-    # Add vectors to index
-    index.add(embeddings.astype("float32"))
+        # Add vectors to index
+        index.add(embeddings.astype("float32"))
 
-    logger.info(f"Built FAISS index with {index.ntotal} vectors, dim={index.d}")
+        logger.info(
+            f"Built HNSW index with {index.ntotal} vectors, dim={index.d}, "
+            f"M={FAISS_HNSW_M}, efConstruction={FAISS_HNSW_EF_CONSTRUCTION}"
+        )
+    else:
+        # Default: Flat index for exact search
+        index = faiss.IndexFlatIP(dimension)
+        index.add(embeddings.astype("float32"))
+
+        logger.info(f"Built Flat index with {index.ntotal} vectors, dim={index.d}")
+
     return index
 
 

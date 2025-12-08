@@ -3,8 +3,13 @@
 This module provides lazy-loaded FAISS indices for code, markdown, and text
 chunks. Indices are stored on disk and loaded on-demand to minimize RAM usage.
 
+v1.2 Updates:
+- Added HNSW index support for faster approximate nearest neighbor search
+- Configurable ef_search parameter for accuracy/speed tradeoff
+- Automatic detection of index type (Flat vs HNSW)
+
 Author: Hay Hoffman
-Version: 1.1
+Version: 1.2
 """
 
 import json
@@ -13,7 +18,7 @@ from pathlib import Path
 
 import faiss
 import numpy as np
-from settings import FAISS_EMBEDDING_DIM
+from settings import FAISS_EMBEDDING_DIM, FAISS_HNSW_EF_SEARCH
 
 logger = logging.getLogger(__name__)
 
@@ -28,11 +33,17 @@ class FAISSStore:
     - Lazy loading: Load index only when needed for search
     - Separate index per source_type for efficient filtering
     - ID-to-position mapping for chunk retrieval
+    - v1.2: Supports both Flat and HNSW index types
+
+    Index Types:
+    - Flat (IndexFlatIP): Exact search, O(n) per query
+    - HNSW (IndexHNSWFlat): Approximate search, O(log n) per query
 
     Attributes:
         index_dir: Directory containing FAISS index files
         indices: Loaded FAISS indices (lazy-loaded)
         id_mappings: Chunk ID to FAISS position mappings
+        index_types: Detected index types per source_type
     """
 
     def __init__(self, index_dir: Path):
@@ -79,6 +90,13 @@ class FAISSStore:
             "text": {}
         }
 
+        # v1.2: Track index types (flat vs hnsw)
+        self.index_types: dict[str, str] = {
+            "code": "unknown",
+            "markdown": "unknown",
+            "text": "unknown"
+        }
+
         # Check which indices exist
         self._check_available_indices()
 
@@ -123,10 +141,23 @@ class FAISSStore:
         try:
             logger.info(f"Loading FAISS index from {index_path}")
             index = faiss.read_index(str(index_path))
+
+            # v1.2: Detect and configure HNSW index
+            index_type = self._detect_index_type(index)
+            self.index_types[source_type] = index_type
+
+            if index_type == "hnsw":
+                # Set ef_search parameter for HNSW (controls accuracy/speed tradeoff)
+                hnsw_index = faiss.downcast_index(index)
+                hnsw_index.hnsw.efSearch = FAISS_HNSW_EF_SEARCH
+                logger.info(
+                    f"Configured HNSW ef_search={FAISS_HNSW_EF_SEARCH} for {source_type}"
+                )
+
             self.indices[source_type] = index
             logger.info(
                 f"Loaded FAISS index for {source_type}: "
-                f"{index.ntotal} vectors, dim={index.d}"
+                f"{index.ntotal} vectors, dim={index.d}, type={index_type}"
             )
 
             # Load ID mapping if available
@@ -137,6 +168,31 @@ class FAISSStore:
         except Exception as e:
             logger.error(f"Failed to load FAISS index from {index_path}: {e}")
             return None
+
+    def _detect_index_type(self, index: faiss.Index) -> str:
+        """Detect the type of FAISS index.
+
+        Args:
+            index: FAISS index to inspect
+
+        Returns:
+            "hnsw", "flat", or "unknown"
+        """
+        # Check if it's an HNSW index
+        try:
+            # Try to access HNSW-specific attribute
+            hnsw_index = faiss.downcast_index(index)
+            if hasattr(hnsw_index, 'hnsw'):
+                return "hnsw"
+        except Exception:
+            pass
+
+        # Check if it's a flat index
+        index_str = str(type(index).__name__).lower()
+        if "flat" in index_str:
+            return "flat"
+
+        return "unknown"
 
     def _load_id_mapping(self, source_type: str) -> None:
         """Load ID mapping from JSON file.
@@ -274,18 +330,27 @@ class FAISSStore:
         """Get statistics about FAISS indices.
 
         Returns:
-            Dict with index statistics
+            Dict with index statistics including index type (v1.2)
         """
         stats = {}
         for source_type in ["code", "markdown", "text"]:
             index = self.indices.get(source_type)
             if index:
+                index_type = self.index_types.get(source_type, "unknown")
                 stats[source_type] = {
                     "loaded": True,
                     "total_vectors": index.ntotal,
                     "dimension": index.d,
+                    "index_type": index_type,
                     "id_mappings": len(self.id_mappings[source_type])
                 }
+                # Add HNSW-specific stats
+                if index_type == "hnsw":
+                    try:
+                        hnsw_index = faiss.downcast_index(index)
+                        stats[source_type]["hnsw_ef_search"] = hnsw_index.hnsw.efSearch
+                    except Exception:
+                        pass
             else:
                 stats[source_type] = {
                     "loaded": False,

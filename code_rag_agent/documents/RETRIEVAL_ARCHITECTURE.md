@@ -1,8 +1,14 @@
 # Retrieval Architecture PRD
 
-**Version**: 1.3
-**Last Updated**: 2025-12-07
+**Version**: 1.4
+**Last Updated**: 2025-12-08
 **Status**: Implementation Ready
+
+**Change Log (v1.4)**:
+- ✅ HNSW index support for faster approximate nearest neighbor search
+- ✅ Configurable index type via FAISS_INDEX_TYPE ("flat" or "hnsw")
+- ✅ HNSW parameters: M=32, efConstruction=64, efSearch=32
+- ✅ Automatic index type detection and configuration on load
 
 **Change Log (v1.3)**:
 - ✅ Pre-built BM25 indices per source_type at startup (~100-300ms savings per query)
@@ -222,6 +228,75 @@ class FAISSStore:
 - **Metadata in RAM**: Fast filtering without loading full chunks or FAISS indices
 - **Separate indices per source_type**: Efficient filtering (load only relevant index)
 - **Lazy loading**: Load FAISS index only when needed for search
+
+#### **HNSW Index Support (v1.4)**
+
+FAISS supports two index types:
+- **IndexFlatIP**: Exact brute-force search, O(N) per query
+- **IndexHNSWFlat**: Approximate nearest neighbor using HNSW algorithm, O(log N) per query
+
+```python
+# settings.py - HNSW Configuration
+FAISS_INDEX_TYPE: str = os.getenv("FAISS_INDEX_TYPE", "hnsw")  # "flat" or "hnsw"
+FAISS_HNSW_M: int = 32          # Connections per layer (higher = better recall, more memory)
+FAISS_HNSW_EF_CONSTRUCTION: int = 64  # Build-time accuracy (higher = better index, slower build)
+FAISS_HNSW_EF_SEARCH: int = 32  # Search-time accuracy (higher = better recall, slower search)
+```
+
+**HNSW Parameters Explained**:
+
+| Parameter | Default | Trade-off |
+|-----------|---------|-----------|
+| `M` | 32 | Higher = better recall, more memory usage |
+| `efConstruction` | 64 | Higher = better index quality, slower index build |
+| `efSearch` | 32 | Higher = better recall, slower query time |
+
+**Performance Comparison** (1000 vectors, 384 dimensions):
+
+| Index Type | Build Time | Query Time | Recall@10 |
+|------------|------------|------------|-----------|
+| Flat (exact) | ~50ms | ~5-10ms | 100% |
+| HNSW (M=32) | ~200ms | ~1-2ms | ~95-99% |
+
+**When to Use**:
+- **Flat**: Small indices (<10K vectors), exact search required
+- **HNSW**: Large indices (>10K vectors), approximate search acceptable
+
+**Index Building**:
+
+```python
+# build_faiss_index.py
+def build_faiss_index(embeddings: np.ndarray) -> faiss.Index:
+    dimension = embeddings.shape[1]
+
+    if FAISS_INDEX_TYPE == "hnsw":
+        # HNSW for approximate nearest neighbor
+        index = faiss.IndexHNSWFlat(dimension, FAISS_HNSW_M, faiss.METRIC_INNER_PRODUCT)
+        index.hnsw.efConstruction = FAISS_HNSW_EF_CONSTRUCTION
+        index.add(embeddings.astype("float32"))
+    else:
+        # Flat for exact search
+        index = faiss.IndexFlatIP(dimension)
+        index.add(embeddings.astype("float32"))
+
+    return index
+```
+
+**Runtime Detection**:
+
+The `FAISSStore` automatically detects the index type on load and configures HNSW parameters:
+
+```python
+# faiss_store.py
+def _detect_index_type(self, index: faiss.Index) -> str:
+    try:
+        hnsw_index = faiss.downcast_index(index)
+        if hasattr(hnsw_index, 'hnsw'):
+            return "hnsw"
+    except Exception:
+        pass
+    return "flat" if "flat" in str(type(index).__name__).lower() else "unknown"
+```
 
 ---
 
@@ -2002,6 +2077,7 @@ def test_end_to_end_retrieval():
 
 - **BM25**: Best Match 25, probabilistic ranking function for keyword search
 - **FAISS**: Facebook AI Similarity Search, vector indexing library
+- **HNSW**: Hierarchical Navigable Small World, graph-based approximate nearest neighbor algorithm
 - **RRF**: Reciprocal Rank Fusion, algorithm for combining search rankings
 - **Metadata Index**: Lightweight in-memory cache of chunk metadata (no content)
 - **Context Expansion**: Enriching retrieved chunks with parent/sibling/import context
@@ -2015,6 +2091,7 @@ def test_end_to_end_retrieval():
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 1.4 | 2025-12-08 | HNSW index support for faster approximate nearest neighbor search |
 | 1.3 | 2025-12-07 | Latency optimizations: pre-built BM25 indices, parallel search, O(1) context expansion, singleton ChunkLoader |
 | 1.2 | 2025-12-07 | Soft folder filtering (boost, not exclude), RRF_FOLDER_BOOST setting |
 | 1.1 | 2025-01-05 | Weighted RRF, code-aware BM25 tokenization, fast path router |
