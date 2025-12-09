@@ -37,7 +37,7 @@ venv.bak/
 *.swo
 *~
 
-# ChromaDB / Vector Store
+# FAISS Vector Store
 data/vector_db/
 
 # HTTPX Repository (cloned locally)
